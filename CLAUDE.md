@@ -14,7 +14,8 @@ The owner is a student with zero coding experience who builds the app by working
 - Native SwiftUI, iOS 18+, Swift Observation (`@Observable`).
 - Chess rules and PGN parsing: ChessKit (https://github.com/chesskit-app/chesskit-swift), via Swift Package Manager.
 - All data stays on the device. No accounts, no server.
-- Stockfish will be bundled later for analysis.
+- Stockfish runs on the phone via ChessKitEngine (https://github.com/chesskit-app/chesskit-engine), Swift Package Manager.
+  Its two neural-network files (~78 MB) are not in git: run `sh scripts/download-stockfish-nets.sh` once after cloning (they live in `ChessApp/Engine/`).
 
 ## License
 GPLv3 (see LICENSE). This is required because Stockfish is GPLv3, so the app will be open source.
@@ -30,6 +31,9 @@ Any added dependency must be GPLv3-compatible.
 - `ChessApp/PGNReader.swift` — turns PGN text into board positions (see "ChessKit quirks").
 - `ChessApp/GameViewerView.swift` / `GameViewerModel.swift` — board screen and step buttons.
 - `ChessApp/ChessBoardView.swift` — draws the board and pieces.
+- `ChessApp/Analysis/` — Stockfish analysis: `StockfishEvaluator` (talks to the engine), `AnalysisCenter` (queue, progress, results), `GameAnalysis` (scores, mistake/blunder rules: 1+ pawn lost = mistake, 2+ = blunder).
+- `ChessApp/EvalBarView.swift` — the eval bar next to the board.
+- `scripts/download-stockfish-nets.sh` — fetches the Stockfish network files.
 - `ChessApp/PastePGNView.swift` — backup option: paste a PGN.
 - `ChessApp/SampleGames.swift` — hard-coded sample PGN.
 
@@ -51,3 +55,4 @@ xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=i
 ## Progress
 - [x] Step 1: board screen that steps through one hard-coded sample game.
 - [x] Step 2: enter a Chess.com/Lichess username, list recent games, open one on the board. Paste PGN as a fallback.
+- [x] Step 3: on-device Stockfish analysis: eval bar, mistake/blunder labels with the best move, "Analyse all 20 games" with per-game counts. Verified in the Simulator; awaiting check on the iPhone.

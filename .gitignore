@@ -4,3 +4,6 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 .swiftpm/
+
+# Stockfish network files are large; run scripts/download-stockfish-nets.sh
+*.nnue

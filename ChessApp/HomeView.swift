@@ -11,6 +11,7 @@ struct HomeView: View {
     @State private var errorMessage: String?
     @State private var showingPaste = false
     @State private var path: [LoadedGameRoute] = []
+    private let analysisCenter = AnalysisCenter.shared
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -46,6 +47,15 @@ struct HomeView: View {
                 }
 
                 if !games.isEmpty {
+                    Section {
+                        Button(action: analyseAll) {
+                            Label("Analyse all \(games.count) games with Stockfish", systemImage: "cpu")
+                        }
+                        .disabled(games.allSatisfy { analysisCenter.analysis(forPGN: $0.pgn) != nil || analysisCenter.isQueued(pgn: $0.pgn) || analysisCenter.progress(forPGN: $0.pgn) != nil })
+                    } footer: {
+                        Text("Runs on your phone in the background while the app is open. You can keep browsing.")
+                    }
+
                     Section("Recent games") {
                         ForEach(games) { game in
                             Button { open(pgn: game.pgn) } label: {
@@ -91,6 +101,14 @@ struct HomeView: View {
         }
     }
 
+    private func analyseAll() {
+        for summary in games {
+            if let game = PGNReader.read(summary.pgn) {
+                analysisCenter.request(game)
+            }
+        }
+    }
+
     private func open(pgn: String) {
         guard let game = PGNReader.read(pgn) else {
             errorMessage = "That game couldn't be read."
@@ -103,6 +121,7 @@ struct HomeView: View {
 /// One line in the games list, e.g. "Won vs Magnus · Blitz · 3+2 · 2 Oct".
 private struct GameRow: View {
     let game: GameSummary
+    private let analysisCenter = AnalysisCenter.shared
 
     var body: some View {
         HStack(spacing: 12) {
@@ -116,11 +135,24 @@ private struct GameRow: View {
                 Text("\(game.timeControl) · \(game.date.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                analysisLine
             }
             Spacer()
             Text(game.outcome.rawValue)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(color(for: game.outcome))
+        }
+    }
+
+    /// Your own mistakes and blunders in this game, or analysis progress.
+    @ViewBuilder
+    private var analysisLine: some View {
+        if let analysis = analysisCenter.analysis(forPGN: game.pgn) {
+            CountsBadge(counts: analysis.counts(forWhite: game.playedWhite))
+        } else if let progress = analysisCenter.progress(forPGN: game.pgn) {
+            Text("Analysing… \(Int(progress * 100))%").font(.caption).foregroundStyle(.secondary)
+        } else if analysisCenter.isQueued(pgn: game.pgn) {
+            Text("Waiting to analyse").font(.caption).foregroundStyle(.secondary)
         }
     }
 

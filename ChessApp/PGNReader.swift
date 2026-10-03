@@ -3,6 +3,8 @@ import Foundation
 
 /// A game read from PGN text: the player names plus every board position in order.
 struct LoadedGame {
+    /// The original PGN text (also used to look up this game's analysis).
+    var pgn: String
     var tags: [String: String]
     /// Index 0 is the starting position, index 1 is after the first move, and so on.
     var positions: [Position]
@@ -49,7 +51,7 @@ enum PGNReader {
 
         // Nothing usable: no tags and no moves.
         if tags.isEmpty && positions.count == 1 { return nil }
-        return LoadedGame(tags: tags, positions: positions, moveNames: moveNames, isComplete: isComplete)
+        return LoadedGame(pgn: pgn, tags: tags, positions: positions, moveNames: moveNames, isComplete: isComplete)
     }
 
     /// Works out which piece moves where for a move like "Nbd7", "exd5", "O-O" or "e8=Q".

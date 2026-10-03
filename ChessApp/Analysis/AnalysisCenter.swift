@@ -28,6 +28,25 @@ final class AnalysisCenter {
     private let deepMilliseconds = 500
 
     private let evaluator = StockfishEvaluator()
+
+    /// Finished analyses are saved here so they survive closing the app and are never redone.
+    private static let saveURL: URL = {
+        let folder = URL.applicationSupportDirectory
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appending(path: "analyses.json")
+    }()
+
+    init() {
+        if let data = try? Data(contentsOf: Self.saveURL),
+           let saved = try? JSONDecoder().decode([String: GameAnalysis].self, from: data) {
+            results = saved
+        }
+    }
+
+    private func save() {
+        guard let data = try? JSONEncoder().encode(results) else { return }
+        try? data.write(to: Self.saveURL, options: .atomic)
+    }
     private var worker: Task<Void, Never>?
 
     func analysis(forPGN pgn: String) -> GameAnalysis? { results[pgn] }
@@ -54,6 +73,7 @@ final class AnalysisCenter {
                 let start = Date()
                 results[next.key] = await analyse(next.game, key: next.key)
                 seconds[next.key] = Date().timeIntervalSince(start)
+                save()
                 progress[next.key] = nil
             }
             worker = nil
@@ -64,6 +84,7 @@ final class AnalysisCenter {
         let positions = game.positions
         var evals: [Evaluation] = []
         var bestMoves: [String?] = []
+        await evaluator.newGame()
 
         // Pass 1: a quick look at every position.
         for (index, position) in positions.enumerated() {

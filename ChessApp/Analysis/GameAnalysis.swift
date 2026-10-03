@@ -1,7 +1,7 @@
 import Foundation
 
 /// An engine score, always from White's point of view.
-enum Evaluation: Hashable {
+enum Evaluation: Hashable, Codable {
     /// Hundredths of a pawn: +150 means White is 1.5 pawns better.
     case centipawns(Int)
     /// Forced checkmate in this many moves. Positive: White mates. Negative: Black mates.
@@ -38,7 +38,7 @@ enum Evaluation: Hashable {
 }
 
 /// How bad a move was, judged by how much evaluation the player who moved gave away.
-enum MoveJudgement: String {
+enum MoveJudgement: String, Codable {
     case mistake = "Mistake"
     case blunder = "Blunder"
 
@@ -53,7 +53,7 @@ enum MoveJudgement: String {
 }
 
 /// The finished analysis of one game. Arrays line up with `LoadedGame.positions`.
-struct GameAnalysis {
+struct GameAnalysis: Codable {
     /// Score of each position (index 0 = starting position).
     var evals: [Evaluation]
     /// Judgement of the move that led to each position (index 0 is always nil).

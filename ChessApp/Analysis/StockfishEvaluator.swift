@@ -5,6 +5,8 @@ import Foundation
 /// Talks to the Stockfish chess engine that runs inside the app (no internet needed).
 ///
 /// Only one position is analysed at a time; `AnalysisCenter` makes sure of that.
+/// Every wait for the engine has a time limit. If Stockfish ever goes quiet, the engine is
+/// restarted and that one position is skipped instead of freezing the whole analysis.
 actor StockfishEvaluator {
     /// What Stockfish thinks of one position.
     struct Result {
@@ -14,25 +16,69 @@ actor StockfishEvaluator {
         var bestMove: String?
     }
 
-    private let engine = Engine(type: .stockfish)
-    private var responses: AsyncStream<EngineResponse>.AsyncIterator?
+    /// Hands out engine messages one at a time, so a wait can be raced against a timer.
+    private final class Reader: @unchecked Sendable {
+        var iterator: AsyncStream<EngineResponse>.AsyncIterator
+        init(_ iterator: AsyncStream<EngineResponse>.AsyncIterator) { self.iterator = iterator }
+        func next() async -> EngineResponse? { await iterator.next() }
+    }
+
+    private var engine = Engine(type: .stockfish)
+    private var reader: Reader?
+
+    /// How many times the engine had to be restarted.
+    private(set) var restarts = 0
 
     /// Starts Stockfish and waits until it's ready (the first start loads its neural networks).
-    private func startIfNeeded() async {
-        guard responses == nil else { return }
+    private func startIfNeeded() async -> Bool {
+        if reader != nil { return true }
         // Use a few of the phone's cores, leaving the rest so the app stays smooth.
         let cores = max(2, min(4, ProcessInfo.processInfo.activeProcessorCount - 1))
         await engine.start(coreCount: cores)
-        responses = await engine.responseStream?.makeAsyncIterator()
+        guard let stream = await engine.responseStream else { return false }
+        reader = Reader(stream.makeAsyncIterator())
+        let deadline = Date().addingTimeInterval(20)
         while await !engine.isRunning {
+            if Date() > deadline { await restart(); return false }
             try? await Task.sleep(for: .milliseconds(20))
         }
         // A small memory table is plenty for short looks and keeps the phone cool.
         await engine.send(command: .setoption(id: "Hash", value: "16"))
-        await waitUntilReady()
+        return await waitUntilReady(timeout: 20)
     }
 
-    /// Analyses one position.
+    /// Throws the engine away and makes a fresh one. The next analysis starts it again.
+    private func restart() async {
+        restarts += 1
+        await engine.stop()
+        engine = Engine(type: .stockfish)
+        reader = nil
+    }
+
+    /// Tells the engine a new game is starting, so it forgets the previous one.
+    func newGame() async {
+        guard await startIfNeeded() else { return }
+        await engine.send(command: .ucinewgame)
+        _ = await waitUntilReady(timeout: 5)
+    }
+
+    /// Waits for the next engine message, giving up after `seconds`.
+    /// Returns nil on timeout (or if the engine's message stream ended).
+    private func nextResponse(timeout seconds: Double) async -> EngineResponse? {
+        guard let reader else { return nil }
+        return await withTaskGroup(of: EngineResponse?.self) { group in
+            group.addTask { await reader.next() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(seconds))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Analyses one position. Returns nil if the engine didn't answer in time.
     ///
     /// - parameter depth: How many moves ahead Stockfish looks.
     /// - parameter maxMilliseconds: Hard time limit, so long games still finish quickly.
@@ -49,7 +95,7 @@ actor StockfishEvaluator {
         default: break
         }
 
-        await startIfNeeded()
+        guard await startIfNeeded() else { return nil }
 
         await engine.send(command: .position(.fen(position.fen)))
         await engine.send(command: .go(depth: depth, movetime: maxMilliseconds))
@@ -58,10 +104,21 @@ actor StockfishEvaluator {
         var bestDepth = -1
         var bestMove: String?
 
-        // An async iterator can't be advanced while stored in an actor property, so use a local copy.
-        guard var iterator = responses else { return nil }
-        defer { responses = iterator }
-        while let response = await iterator.next() {
+        // The engine should answer within its time limit; allow some slack, then ask it to stop.
+        var wait = Double(maxMilliseconds) / 1000 + 2
+        var askedToStop = false
+        while true {
+            guard let response = await nextResponse(timeout: wait) else {
+                if askedToStop {
+                    // Still silent: the engine is stuck. Restart it and skip this position.
+                    await restart()
+                    return nil
+                }
+                await engine.send(command: .stop)
+                askedToStop = true
+                wait = 2
+                continue
+            }
             // Messages can arrive slightly out of order, so a late message about the previous
             // position may turn up here. Its suggested move would start from a square that
             // doesn't hold one of our pieces, which is how we spot and skip it.
@@ -80,9 +137,7 @@ actor StockfishEvaluator {
         }
 
         // Keep the engine in step before the next position.
-        responses = iterator
-        await waitUntilReady()
-        iterator = responses ?? iterator
+        guard await waitUntilReady(timeout: 3) else { return nil }
 
         guard let bestScore else { return nil }
         // Stockfish scores from the side to move; flip so positive always means White is better.
@@ -104,12 +159,17 @@ actor StockfishEvaluator {
         return position.piece(at: start)?.color == position.sideToMove
     }
 
-    private func waitUntilReady() async {
-        guard var iterator = responses else { return }
-        defer { responses = iterator }
+    /// Sends "isready" and waits for the engine's "readyok". Restarts the engine if it never comes.
+    private func waitUntilReady(timeout seconds: Double) async -> Bool {
         await engine.send(command: .isready)
-        while let response = await iterator.next() {
-            if case .readyok = response { return }
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0, let response = await nextResponse(timeout: remaining) else {
+                await restart()
+                return false
+            }
+            if case .readyok = response { return true }
         }
     }
 }

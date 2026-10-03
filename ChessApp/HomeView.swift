@@ -48,12 +48,9 @@ struct HomeView: View {
 
                 if !games.isEmpty {
                     Section {
-                        Button(action: analyseAll) {
-                            Label("Analyse all \(games.count) games with Stockfish", systemImage: "cpu")
-                        }
-                        .disabled(games.allSatisfy { analysisCenter.analysis(forPGN: $0.pgn) != nil || analysisCenter.isQueued(pgn: $0.pgn) || analysisCenter.progress(forPGN: $0.pgn) != nil })
+                        analysisSummary
                     } footer: {
-                        Text("Runs on your phone in the background while the app is open. You can keep browsing.")
+                        Text("Your games are checked by Stockfish on your phone while the app is open. Tap a game to see its result.")
                     }
 
                     Section("Recent games") {
@@ -93,11 +90,35 @@ struct HomeView: View {
         Task {
             do {
                 games = try await GameFetcher.recentGames(for: name, on: site)
+                analyseAll()
             } catch {
                 games = []
                 errorMessage = error.localizedDescription
             }
             isLoading = false
+        }
+    }
+
+    /// How many of the listed games are fully analysed, plus a Stop/Resume button.
+    private var analysisSummary: some View {
+        let done = games.filter { analysisCenter.analysis(forPGN: $0.pgn) != nil }.count
+        return HStack {
+            if done == games.count {
+                Label("All \(games.count) games analysed", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                Label(analysisCenter.isPaused ? "Paused: \(done) of \(games.count) analysed" : "Analysing: \(done) of \(games.count) done",
+                      systemImage: "cpu")
+                Spacer()
+                Button(analysisCenter.isPaused ? "Resume" : "Stop") {
+                    if analysisCenter.isPaused {
+                        analysisCenter.resume()
+                    } else {
+                        analysisCenter.pause()
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
         }
     }
 

@@ -58,4 +58,4 @@ xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=i
 ## Progress
 - [x] Step 1: board screen that steps through one hard-coded sample game.
 - [x] Step 2: enter a Chess.com/Lichess username, list recent games, open one on the board. Paste PGN as a fallback.
-- [x] Step 3: on-device Stockfish analysis: eval bar, mistake/blunder labels with the best move, "Analyse all 20 games" with per-game counts. Verified in the Simulator; awaiting check on the iPhone.
+- [x] Step 3: on-device Stockfish analysis: eval bar, mistake/blunder labels with the best move, background analysis of the last 20 games with per-game counts. Confirmed on iPhone 14 (20 games, 7-39 s each). Analysis starts automatically after games load, with Stop/Resume; results are saved on the phone.

@@ -18,7 +18,9 @@ final class AnalysisCenter {
     /// How many seconds each finished analysis took.
     private(set) var seconds: [String: Double] = [:]
     /// Games waiting to be analysed.
-    private(set) var queue: [(key: String, game: LoadedGame)] = []
+    private(set) var queue: [(key: String, game: LoadedGame, urgent: Bool)] = []
+    /// True after the user taps Stop. Only the game being looked at (urgent) is still analysed.
+    private(set) var isPaused = false
 
     // Quick first pass: kept modest so a 40-move game takes well under a minute on an iPhone 14.
     private let quickDepth = 12
@@ -60,27 +62,42 @@ final class AnalysisCenter {
         let key = game.pgn
         guard results[key] == nil, progress[key] == nil else { return }
         queue.removeAll { $0.key == key }
-        if urgent { queue.insert((key, game), at: 0) } else { queue.append((key, game)) }
+        if urgent { queue.insert((key, game, true), at: 0) } else { queue.append((key, game, false)) }
+        startWorkerIfNeeded()
+    }
+
+    /// Stops background analysis. The game being analysed goes back in the queue.
+    func pause() { isPaused = true }
+
+    /// Carries on with the waiting games.
+    func resume() {
+        isPaused = false
         startWorkerIfNeeded()
     }
 
     private func startWorkerIfNeeded() {
         guard worker == nil else { return }
         worker = Task {
-            while !queue.isEmpty {
-                let next = queue.removeFirst()
+            // While paused, only games the user opened (urgent) are analysed.
+            while let index = queue.firstIndex(where: { !isPaused || $0.urgent }) {
+                let next = queue.remove(at: index)
                 progress[next.key] = 0
                 let start = Date()
-                results[next.key] = await analyse(next.game, key: next.key)
-                seconds[next.key] = Date().timeIntervalSince(start)
-                save()
+                if let result = await analyse(next.game, key: next.key, urgent: next.urgent) {
+                    results[next.key] = result
+                    seconds[next.key] = Date().timeIntervalSince(start)
+                    save()
+                } else {
+                    // Stopped part-way: keep the game at the front of the queue.
+                    queue.insert(next, at: 0)
+                }
                 progress[next.key] = nil
             }
             worker = nil
         }
     }
 
-    private func analyse(_ game: LoadedGame, key: String) async -> GameAnalysis {
+    private func analyse(_ game: LoadedGame, key: String, urgent: Bool) async -> GameAnalysis? {
         let positions = game.positions
         var evals: [Evaluation] = []
         var bestMoves: [String?] = []
@@ -88,6 +105,7 @@ final class AnalysisCenter {
 
         // Pass 1: a quick look at every position.
         for (index, position) in positions.enumerated() {
+            if isPaused && !urgent { return nil }
             let result = await evaluator.evaluate(position, depth: quickDepth, maxMilliseconds: quickMilliseconds)
             evals.append(result?.eval ?? evals.last ?? .centipawns(0))
             bestMoves.append(result?.bestMove)
@@ -103,6 +121,7 @@ final class AnalysisCenter {
             let toDeepen = Set(suspects.flatMap { [$0 - 1, $0] }).subtracting(deepened).sorted()
             if toDeepen.isEmpty { break }
             for (step, index) in toDeepen.enumerated() {
+                if isPaused && !urgent { return nil }
                 if let result = await evaluator.evaluate(positions[index], depth: deepDepth, maxMilliseconds: deepMilliseconds) {
                     evals[index] = result.eval
                     bestMoves[index] = result.bestMove

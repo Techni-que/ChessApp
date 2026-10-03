@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// The app's starting point. It opens one window showing the game viewer.
+/// The app's starting point. It opens on the home screen.
 @main
 struct ChessAppApp: App {
     var body: some Scene {
         WindowGroup {
-            GameViewerView()
+            HomeView()
         }
     }
 }

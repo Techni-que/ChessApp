@@ -24,10 +24,24 @@ Any added dependency must be GPLv3-compatible.
 - `ChessApp.xcodeproj` — open this in Xcode. Files in `ChessApp/` are picked up automatically
   (synchronized folder), so new Swift files don't need to be added to the project by hand.
 - `ChessApp/ChessAppApp.swift` — app entry point.
-- `ChessApp/GameViewerView.swift` — main screen (board + step buttons).
-- `ChessApp/GameViewerModel.swift` — loads a PGN and tracks the current move.
+- `ChessApp/HomeView.swift` — first screen: username box, recent games list, paste/sample options.
+- `ChessApp/GameFetcher.swift` — downloads recent games from the Chess.com and Lichess public APIs.
+- `ChessApp/GameSummary.swift` — one game in the list (opponent, result, date, time control, PGN).
+- `ChessApp/PGNReader.swift` — turns PGN text into board positions (see "ChessKit quirks").
+- `ChessApp/GameViewerView.swift` / `GameViewerModel.swift` — board screen and step buttons.
 - `ChessApp/ChessBoardView.swift` — draws the board and pieces.
+- `ChessApp/PastePGNView.swift` — backup option: paste a PGN.
 - `ChessApp/SampleGames.swift` — hard-coded sample PGN.
+
+## ChessKit quirks (as of 0.17.0)
+Don't use `Game(pgn:)` or `Move(san:)` to load games. They fail on en passant captures and ignore
+disambiguation on captures (e.g. "Rexe3"). `PGNReader` resolves moves itself via `Board.legalMoves`
+and plays them on a `Board`. It was checked against 531 real Chess.com games (final positions matched).
+
+## APIs (free, no login)
+- Chess.com: `api.chess.com/pub/player/{user}/games/archives`, then the newest monthly archives.
+- Lichess: `lichess.org/api/games/user/{user}?max=20&pgnInJson=true`, Accept `application/x-ndjson`.
+  Lichess allows only one request at a time per IP; a 429 means wait a minute.
 
 ## Checking that it builds
 ```
@@ -36,3 +50,4 @@ xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=i
 
 ## Progress
 - [x] Step 1: board screen that steps through one hard-coded sample game.
+- [x] Step 2: enter a Chess.com/Lichess username, list recent games, open one on the board. Paste PGN as a fallback.

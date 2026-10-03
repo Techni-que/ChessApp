@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// The main screen: player names, the board, the current move, and step buttons.
+/// Shows one game: player names, the board, the current move, and step buttons.
 struct GameViewerView: View {
-    @State private var model = GameViewerModel(pgn: SampleGames.operaGame)
+    @State private var model: GameViewerModel
+
+    init(game: LoadedGame) {
+        _model = State(initialValue: GameViewerModel(game: game))
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -18,9 +22,16 @@ struct GameViewerView: View {
             Text(model.currentMoveName.isEmpty ? "Starting position" : model.currentMoveName)
                 .font(.title2.monospaced())
 
-            Text("Move \(model.currentIndex) of \(model.positions.count - 1)")
+            Text("Move \(model.currentIndex) of \(model.moveCount)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            if !model.game.isComplete {
+                Text("Some moves in this game couldn't be read, so it stops early.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
 
             HStack(spacing: 32) {
                 Button(action: model.goToStart) { Image(systemName: "backward.end.fill") }
@@ -39,9 +50,12 @@ struct GameViewerView: View {
             .font(.title)
         }
         .padding()
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 #Preview {
-    GameViewerView()
+    NavigationStack {
+        GameViewerView(game: PGNReader.read(SampleGames.operaGame)!)
+    }
 }

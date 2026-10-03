@@ -27,6 +27,8 @@ actor StockfishEvaluator {
         while await !engine.isRunning {
             try? await Task.sleep(for: .milliseconds(20))
         }
+        // A small memory table is plenty for short looks and keeps the phone cool.
+        await engine.send(command: .setoption(id: "Hash", value: "16"))
         await waitUntilReady()
     }
 

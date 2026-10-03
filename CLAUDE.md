@@ -47,6 +47,9 @@ and plays them on a `Board`. It was checked against 531 real Chess.com games (fi
 - Lichess: `lichess.org/api/games/user/{user}?max=20&pgnInJson=true`, Accept `application/x-ndjson`.
   Lichess allows only one request at a time per IP; a 429 means wait a minute.
 
+## Run in Release
+The shared Run scheme (`ChessApp.xcodeproj/xcshareddata/xcschemes/ChessApp.xcscheme`) uses the Release configuration on purpose. In Debug, Stockfish's C++ is compiled with no optimisation and analysis is many times slower on a phone. The game screen shows "Analysed in N s" so speed can be checked.
+
 ## Checking that it builds
 ```
 xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=iOS Simulator,name=iPhone 17' build

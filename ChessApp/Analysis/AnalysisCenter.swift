@@ -15,21 +15,24 @@ final class AnalysisCenter {
     private(set) var results: [String: GameAnalysis] = [:]
     /// Progress (0 to 1) of the game being analysed right now.
     private(set) var progress: [String: Double] = [:]
+    /// How many seconds each finished analysis took.
+    private(set) var seconds: [String: Double] = [:]
     /// Games waiting to be analysed.
     private(set) var queue: [(key: String, game: LoadedGame)] = []
 
     // Quick first pass: kept modest so a 40-move game takes well under a minute on an iPhone 14.
-    private let quickDepth = 13
-    private let quickMilliseconds = 250
+    private let quickDepth = 12
+    private let quickMilliseconds = 150
     // Suspected mistakes get a deeper second look, so sacrifices aren't wrongly flagged.
-    private let deepDepth = 18
-    private let deepMilliseconds = 800
+    private let deepDepth = 16
+    private let deepMilliseconds = 500
 
     private let evaluator = StockfishEvaluator()
     private var worker: Task<Void, Never>?
 
     func analysis(forPGN pgn: String) -> GameAnalysis? { results[pgn] }
     func progress(forPGN pgn: String) -> Double? { progress[pgn] }
+    func seconds(forPGN pgn: String) -> Double? { seconds[pgn] }
     func isQueued(pgn: String) -> Bool { queue.contains { $0.key == pgn } }
     var isBusy: Bool { worker != nil }
 
@@ -48,7 +51,9 @@ final class AnalysisCenter {
             while !queue.isEmpty {
                 let next = queue.removeFirst()
                 progress[next.key] = 0
+                let start = Date()
                 results[next.key] = await analyse(next.game, key: next.key)
+                seconds[next.key] = Date().timeIntervalSince(start)
                 progress[next.key] = nil
             }
             worker = nil

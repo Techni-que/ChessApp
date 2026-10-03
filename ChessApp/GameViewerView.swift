@@ -95,7 +95,11 @@ struct GameViewerView: View {
 
     @ViewBuilder
     private var analysisStatus: some View {
-        if analysis == nil {
+        if analysis != nil {
+            if let seconds = analysisCenter.seconds(forPGN: model.game.pgn) {
+                Text("Analysed in \(Int(seconds.rounded())) s").font(.caption2).foregroundStyle(.secondary)
+            }
+        } else {
             if let progress = analysisCenter.progress(forPGN: model.game.pgn) {
                 ProgressView(value: progress) {
                     Text("Stockfish is analysing… \(Int(progress * 100))%").font(.caption)

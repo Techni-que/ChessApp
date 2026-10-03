@@ -6,8 +6,10 @@ struct GameViewerView: View {
     @State private var model: GameViewerModel
     private let analysisCenter = AnalysisCenter.shared
 
-    init(game: LoadedGame) {
-        _model = State(initialValue: GameViewerModel(game: game))
+    init(game: LoadedGame, startIndex: Int = 0) {
+        let model = GameViewerModel(game: game)
+        model.currentIndex = min(max(startIndex, 0), model.moveCount)
+        _model = State(initialValue: model)
     }
 
     private var analysis: GameAnalysis? { analysisCenter.analysis(forPGN: model.game.pgn) }

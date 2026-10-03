@@ -10,6 +10,7 @@ struct HomeView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showingPaste = false
+    @State private var leakReport: LeakReport?
     @State private var path: [LoadedGameRoute] = []
     private let analysisCenter = AnalysisCenter.shared
 
@@ -49,6 +50,7 @@ struct HomeView: View {
                 if !games.isEmpty {
                     Section {
                         analysisSummary
+                        leakReportRow
                     } footer: {
                         Text("Your games are checked by Stockfish on your phone while the app is open. Tap a game to see its result.")
                     }
@@ -70,8 +72,9 @@ struct HomeView: View {
             }
             .navigationTitle("ChessApp")
             .navigationDestination(for: LoadedGameRoute.self) { route in
-                GameViewerView(game: route.game)
+                GameViewerView(game: route.game, startIndex: route.startIndex)
             }
+            .sheet(item: $leakReport) { LeakReportView(report: $0) }
             .sheet(isPresented: $showingPaste) {
                 PastePGNView { pgn in open(pgn: pgn) }
             }
@@ -119,6 +122,32 @@ struct HomeView: View {
                 }
                 .buttonStyle(.bordered)
             }
+        }
+    }
+
+    /// Analysed games, paired with their summaries, in list order.
+    private var analysedGames: [AnalysedGame] {
+        games.compactMap { summary in
+            guard let analysis = analysisCenter.analysis(forPGN: summary.pgn),
+                  let game = PGNReader.read(summary.pgn) else { return nil }
+            return AnalysedGame(summary: summary, game: game, analysis: analysis)
+        }
+    }
+
+    /// Appears once enough games are analysed.
+    @ViewBuilder
+    private var leakReportRow: some View {
+        let done = games.filter { analysisCenter.analysis(forPGN: $0.pgn) != nil }.count
+        if done >= LeakDetector.minimumGames {
+            Button {
+                leakReport = LeakDetector.report(for: analysedGames)
+            } label: {
+                Label("See my top 3 leaks", systemImage: "chart.bar.doc.horizontal")
+            }
+        } else {
+            Text("Your top-leaks report unlocks after \(LeakDetector.minimumGames) analysed games.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -190,6 +219,8 @@ private struct GameRow: View {
 struct LoadedGameRoute: Hashable {
     let id = UUID()
     let game: LoadedGame
+    /// Which position to open on (0 = the starting position).
+    var startIndex = 0
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

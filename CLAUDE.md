@@ -32,6 +32,7 @@ Any added dependency must be GPLv3-compatible.
 - `ChessApp/GameViewerView.swift` / `GameViewerModel.swift` — board screen and step buttons.
 - `ChessApp/ChessBoardView.swift` — draws the board and pieces.
 - `ChessApp/Analysis/` — Stockfish analysis: `StockfishEvaluator` (talks to the engine), `AnalysisCenter` (queue, progress, results), `GameAnalysis` (scores, mistake/blunder rules: 1+ pawn lost = mistake, 2+ = blunder).
+- `ChessApp/Leaks/` — Step 4 report: `LeakReport.swift` (finds the player's recurring mistakes in analysed games, ranks by total cost; unlocks at 10 analysed games) and `LeakReportView.swift` (the cards, with examples that open on the board).
 - `ChessApp/EvalBarView.swift` — the eval bar next to the board.
 - `scripts/download-stockfish-nets.sh` — fetches the Stockfish network files.
 - `ChessApp/PastePGNView.swift` — backup option: paste a PGN.
@@ -59,3 +60,4 @@ xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=i
 - [x] Step 1: board screen that steps through one hard-coded sample game.
 - [x] Step 2: enter a Chess.com/Lichess username, list recent games, open one on the board. Paste PGN as a fallback.
 - [x] Step 3: on-device Stockfish analysis: eval bar, mistake/blunder labels with the best move, background analysis of the last 20 games with per-game counts. Confirmed on iPhone 14 (20 games, 7-39 s each). Analysis starts automatically after games load, with Stop/Resume; results are saved on the phone.
+- [x] Step 4: "top 3 leaks" report (hanging pieces, missed tactics, not converting wins, middlegame drift, time trouble). Needs 10 analysed games. Tested in the Simulator with real games.

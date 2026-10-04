@@ -38,6 +38,46 @@ enum GameFetcher {
         return games
     }
 
+    /// The speed a player has played most (rated games) in the last 3 months, or nil if they
+    /// haven't played any in that time. Used to pick a sensible starting speed, so someone who
+    /// moved from bullet to rapid isn't shown bullet just because they played more of it years ago.
+    static func mostPlayedRecently(for username: String, on site: ChessSite) async -> TimeControl? {
+        let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cutoff = Date().addingTimeInterval(-90 * 24 * 3600)
+        var speeds: [TimeControl] = []
+        switch site {
+        case .chessCom:
+            let user = name.lowercased()
+            guard let encoded = user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let archivesURL = URL(string: "https://api.chess.com/pub/player/\(encoded)/games/archives"),
+                  let archives = try? await get(ChessComArchives.self, from: archivesURL, username: name) else { return nil }
+            // Three months of archives cover the last 90 days.
+            for monthURL in archives.archives.reversed().prefix(4) {
+                guard let url = URL(string: monthURL),
+                      let month = try? await get(ChessComMonth.self, from: url, username: name) else { continue }
+                speeds += month.games
+                    .filter { $0.rules == "chess" && $0.rated == true && Date(timeIntervalSince1970: $0.end_time) >= cutoff }
+                    .compactMap { TimeControl.from(siteSpeed: $0.time_class) }
+            }
+        case .lichess:
+            let sinceMilliseconds = Int(cutoff.timeIntervalSince1970 * 1000)
+            guard let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+                  let url = URL(string: "https://lichess.org/api/games/user/\(encoded)?since=\(sinceMilliseconds)&max=300&rated=true&moves=false") else { return nil }
+            var request = URLRequest(url: url)
+            request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
+            guard let data = try? await send(request, username: name) else { return nil }
+            speeds = String(decoding: data, as: UTF8.self)
+                .split(separator: "\n")
+                .compactMap { line -> TimeControl? in
+                    guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                          let speed = object["speed"] as? String else { return nil }
+                    return TimeControl.from(siteSpeed: speed)
+                }
+        }
+        let counts = Dictionary(grouping: speeds, by: { $0 }).mapValues(\.count)
+        return counts.max(by: { $0.value < $1.value })?.key
+    }
+
     /// How many rated games a player has played at each speed, over their whole history.
     /// Used to show only the speeds they actually play, and to pick the most-played one.
     static func gameCounts(for username: String, on site: ChessSite) async throws -> [TimeControl: Int] {

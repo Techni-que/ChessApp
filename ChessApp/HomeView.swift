@@ -7,6 +7,8 @@ struct HomeView: View {
     @AppStorage("site") private var site = ChessSite.chessCom
     // The time control being looked at (remembered between launches).
     @AppStorage("speed") private var speed = TimeControl.blitz
+    // True once the player has tapped the picker themselves, so we know the saved speed is their choice.
+    @AppStorage("hasChosenSpeed") private var hasChosenSpeed = false
 
     @State private var games: [GameSummary] = []
     /// How many games the player has at each speed (decides which speeds are offered).
@@ -57,7 +59,7 @@ struct HomeView: View {
 
                 if availableSpeeds.count > 1 {
                     Section {
-                        Picker("Time control", selection: $speed) {
+                        Picker("Time control", selection: Binding(get: { speed }, set: { speed = $0; hasChosenSpeed = true })) {
                             ForEach(availableSpeeds) { Text($0.rawValue).tag($0) }
                         }
                         .pickerStyle(.segmented)
@@ -159,9 +161,16 @@ struct HomeView: View {
                 guard thisRequest == requestID else { return }
                 guard !counts.isEmpty else { throw GameFetcher.FetchError.noGames }
                 speedCounts = counts
-                // Keep the remembered speed if they play it; otherwise their most-played one.
-                if (counts[speed] ?? 0) == 0, let mostPlayed = counts.max(by: { $0.value < $1.value })?.key {
-                    speed = mostPlayed
+                // Keep the speed they picked last time if they still play it. Otherwise start on the
+                // speed with the most rated games in the last 3 months, then on their most-played overall.
+                if !(hasChosenSpeed && (counts[speed] ?? 0) > 0) {
+                    let recent = await GameFetcher.mostPlayedRecently(for: name, on: chosenSite)
+                    guard thisRequest == requestID else { return }
+                    if let recent, (counts[recent] ?? 0) > 0 {
+                        speed = recent
+                    } else if let mostPlayed = counts.max(by: { $0.value < $1.value })?.key {
+                        speed = mostPlayed
+                    }
                 }
                 gameLimit = GameFetcher.pageSize
                 isLoading = false

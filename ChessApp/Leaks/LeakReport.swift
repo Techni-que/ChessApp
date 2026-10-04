@@ -107,6 +107,8 @@ struct LeakReport: Identifiable {
     let gamesAnalysed: Int
     /// The player's rating, averaged from the games (1400 if the games don't say).
     var playerRating = 1400
+    /// Which time control the report covers (for wording like "your last 20 blitz games").
+    var speed: TimeControl?
 }
 
 /// Looks through analysed games for the mistakes this player repeats.
@@ -155,7 +157,8 @@ enum LeakDetector {
 
             let clocks = clockSeconds(in: item.game.pgn)
             let baseSeconds = baseTime(of: item.game)
-            let hasClocks = clocks.count >= 10 && baseSeconds != nil
+            // Daily games have days per move, so "low on time" doesn't apply.
+            let hasClocks = clocks.count >= 10 && baseSeconds != nil && item.summary.speed != .daily
             if hasClocks { gamesWithClocks += 1 }
 
             // Mistakes and blunders by the player.
@@ -294,7 +297,7 @@ enum LeakDetector {
         // Only keep leaks that repeat, then rank by how much they cost in total.
         let recurring = leaks.filter { $0.gamesAffected >= 2 }
         let ranked = recurring.sorted { $0.totalCost > $1.totalCost }
-        return LeakReport(leaks: Array(ranked.prefix(3)), gamesAnalysed: games.count, playerRating: rating(of: games))
+        return LeakReport(leaks: Array(ranked.prefix(3)), gamesAnalysed: games.count, playerRating: rating(of: games), speed: games.first?.summary.speed)
     }
 
     // MARK: - Helpers

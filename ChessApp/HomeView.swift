@@ -5,8 +5,16 @@ struct HomeView: View {
     // Remembered between app launches, so you don't have to retype your username.
     @AppStorage("username") private var username = ""
     @AppStorage("site") private var site = ChessSite.chessCom
+    // The time control being looked at (remembered between launches).
+    @AppStorage("speed") private var speed = TimeControl.blitz
 
     @State private var games: [GameSummary] = []
+    /// How many games the player has at each speed (decides which speeds are offered).
+    @State private var speedCounts: [TimeControl: Int] = [:]
+    /// How many games we've asked for so far (20, then 40 after "Load 20 more", ...).
+    @State private var gameLimit = GameFetcher.pageSize
+    /// Bumped on every new request so a slow, outdated answer can't overwrite a newer one.
+    @State private var requestID = 0
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showingPaste = false
@@ -47,6 +55,19 @@ struct HomeView: View {
                     }
                 }
 
+                if availableSpeeds.count > 1 {
+                    Section {
+                        Picker("Time control", selection: $speed) {
+                            ForEach(availableSpeeds) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                    } header: {
+                        Text("Time control")
+                    } footer: {
+                        Text("Your mistakes are different in different speeds, so each one gets its own report.")
+                    }
+                }
+
                 if !games.isEmpty {
                     Section {
                         analysisSummary
@@ -55,12 +76,30 @@ struct HomeView: View {
                         Text("Your games are checked by Stockfish on your phone while the app is open. Tap a game to see its result.")
                     }
 
-                    Section("Recent games") {
+                    Section {
                         ForEach(games) { game in
                             Button { open(pgn: game.pgn) } label: {
                                 GameRow(game: game)
                             }
                             .foregroundStyle(.primary)
+                        }
+                        if games.count >= gameLimit {
+                            Button(action: loadMore) {
+                                HStack {
+                                    Text("Load \(GameFetcher.pageSize) more")
+                                    if isLoading {
+                                        Spacer()
+                                        ProgressView()
+                                    }
+                                }
+                            }
+                            .disabled(isLoading)
+                        }
+                    } header: {
+                        Text("Recent \(speed.sentenceName) games")
+                    } footer: {
+                        if games.count < gameLimit {
+                            Text(shortfallText)
                         }
                     }
                 }
@@ -80,26 +119,92 @@ struct HomeView: View {
             }
             .onChange(of: site) {
                 games = []
+                speedCounts = [:]
                 errorMessage = nil
+            }
+            .onChange(of: speed) {
+                // Picking a different speed loads that speed's newest games.
+                guard !speedCounts.isEmpty else { return }
+                gameLimit = GameFetcher.pageSize
+                // Clear the old speed's list straight away so it isn't shown under the new heading.
+                games = []
+                loadGames()
             }
         }
     }
 
+    /// Speeds the player has games in, in the usual order.
+    private var availableSpeeds: [TimeControl] {
+        TimeControl.allCases.filter { (speedCounts[$0] ?? 0) > 0 }
+    }
+
+    /// Tells the player when a speed has fewer games than we asked for.
+    private var shortfallText: String {
+        let months = site == .chessCom ? " in the last \(GameFetcher.maxMonths) months" : ""
+        return "Only found \(games.count) rated \(speed.sentenceName) games\(months)."
+    }
+
+    /// Looks up which speeds the player uses, picks one, then loads its games.
     private func findGames() {
         let name = username.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty, !isLoading else { return }
         isLoading = true
         errorMessage = nil
+        requestID += 1
+        let thisRequest = requestID
+        let chosenSite = site
         Task {
             do {
-                games = try await GameFetcher.recentGames(for: name, on: site)
+                let counts = try await GameFetcher.gameCounts(for: name, on: chosenSite)
+                guard thisRequest == requestID else { return }
+                guard !counts.isEmpty else { throw GameFetcher.FetchError.noGames }
+                speedCounts = counts
+                // Keep the remembered speed if they play it; otherwise their most-played one.
+                if (counts[speed] ?? 0) == 0, let mostPlayed = counts.max(by: { $0.value < $1.value })?.key {
+                    speed = mostPlayed
+                }
+                gameLimit = GameFetcher.pageSize
+                isLoading = false
+                loadGames()
+            } catch {
+                guard thisRequest == requestID else { return }
+                games = []
+                speedCounts = [:]
+                errorMessage = error.localizedDescription
+                isLoading = false
+            }
+        }
+    }
+
+    /// Loads the newest games of the chosen speed (up to `gameLimit`) and starts analysing them.
+    private func loadGames() {
+        let name = username.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        isLoading = true
+        errorMessage = nil
+        requestID += 1
+        let thisRequest = requestID
+        let chosenSite = site, chosenSpeed = speed, limit = gameLimit
+        Task {
+            do {
+                let loaded = try await GameFetcher.recentGames(for: name, on: chosenSite, speed: chosenSpeed, limit: limit)
+                guard thisRequest == requestID else { return }
+                games = loaded
+                // Games already analysed are remembered, so switching back and forth costs nothing.
+                analysisCenter.clearWaiting()
                 analyseAll()
             } catch {
+                guard thisRequest == requestID else { return }
                 games = []
                 errorMessage = error.localizedDescription
             }
             isLoading = false
         }
+    }
+
+    private func loadMore() {
+        gameLimit += GameFetcher.pageSize
+        loadGames()
     }
 
     /// How many of the listed games are fully analysed, plus a Stop/Resume button.
@@ -145,10 +250,20 @@ struct HomeView: View {
                 Label("See my top 3 leaks", systemImage: "chart.bar.doc.horizontal")
             }
         } else {
-            Text("Your top-leaks report unlocks after \(LeakDetector.minimumGames) analysed games.")
+            Text(unlockText(done: done))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// What to say while the report is locked, and what's needed to unlock it.
+    private func unlockText(done: Int) -> String {
+        let name = speed.sentenceName
+        if games.count < LeakDetector.minimumGames {
+            // Not enough games exist yet, so analysing won't help; they need to play more.
+            return "\(LeakDetector.minimumGames - games.count) more \(name) games to unlock your leaks. Play a few more and come back."
+        }
+        return "\(LeakDetector.minimumGames - done) more \(name) games to analyse to unlock your leaks."
     }
 
     private func analyseAll() {

@@ -26,7 +26,8 @@ Any added dependency must be GPLv3-compatible.
   (synchronized folder), so new Swift files don't need to be added to the project by hand.
 - `ChessApp/ChessAppApp.swift` — app entry point.
 - `ChessApp/HomeView.swift` — first screen: username box, recent games list, paste/sample options.
-- `ChessApp/GameFetcher.swift` — downloads recent games from the Chess.com and Lichess public APIs.
+- `ChessApp/GameFetcher.swift` — downloads the newest rated games of one speed from the Chess.com and Lichess public APIs, and looks up which speeds a player uses.
+- `ChessApp/TimeControl.swift` — the speed groups (Bullet, Blitz, Rapid, Classical, Daily) and how each site's labels map onto them.
 - `ChessApp/GameSummary.swift` — one game in the list (opponent, result, date, time control, PGN).
 - `ChessApp/PGNReader.swift` — turns PGN text into board positions (see "ChessKit quirks").
 - `ChessApp/GameViewerView.swift` / `GameViewerModel.swift` — board screen and step buttons.
@@ -64,3 +65,5 @@ xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=i
 - [x] Step 3: on-device Stockfish analysis: eval bar, mistake/blunder labels with the best move, background analysis of the last 20 games with per-game counts. Confirmed on iPhone 14 (20 games, 7-39 s each). Analysis starts automatically after games load, with Stop/Resume; results are saved on the phone.
 - [x] Step 4: "top 3 leaks" report (hanging pieces, missed tactics, not converting wins, middlegame drift, time trouble). Needs 10 analysed games. Tested in the Simulator with real games.
 - [x] Step 5: "Drill this leak" on each leak card: 10-question sessions mixing the player's own mistakes (accepts Stockfish's best move or anything within 0.3 pawns; shows the line after 2 wrong tries) with matching Lichess puzzles. Right/wrong per leak saved on the phone. Tested in the Simulator; not yet checked on the iPhone.
+- [x] Step 6 (partly): time-control picker. Only speeds the player has rated games in are shown (from each site's stats), the most recent choice is remembered, and the newest 20 RATED games of that speed are fetched (Chess.com: walks back up to 12 months; Lichess: filtered by the API). "Load 20 more" fetches the next 20. Leak report, drills and puzzle rating follow the chosen speed; time-trouble leak is skipped for Daily. Tested in the Simulator on both sites.
+- [ ] Step 6, still to decide with the owner: "Just for fun" speed toggle and a buried "Not a real game" option (the owner earlier argued against hiding games, so ask before building).

@@ -11,7 +11,7 @@ struct LeakReportView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Based on your last \(report.gamesAnalysed) games. Only your own moves are counted.")
+                    Text("Based on your last \(report.gamesAnalysed) \(report.speed?.sentenceName ?? "") games. Only your own moves are counted.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 

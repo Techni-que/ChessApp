@@ -7,6 +7,7 @@ enum GameFetcher {
         case playerNotFound(String)
         case busy
         case noGames
+        case noGamesOfSpeed(TimeControl)
         case network
 
         var errorDescription: String? {
@@ -14,29 +15,44 @@ enum GameFetcher {
             case .playerNotFound(let name): "Couldn't find a player called \"\(name)\". Check the spelling and the site."
             case .busy: "The site is busy right now. Wait a minute and try again."
             case .noGames: "No recent standard chess games found for this player."
+            case .noGamesOfSpeed(let speed): "No recent \(speed.sentenceName) games found for this player. Try another time control."
             case .network: "Couldn't connect. Check your internet connection and try again."
             }
         }
     }
 
-    /// How many games to show.
-    static let maxGames = 20
+    /// How many games to load at a time.
+    static let pageSize = 20
+    /// Chess.com only hands over games month by month, so we stop after this many months back.
+    static let maxMonths = 12
 
-    static func recentGames(for username: String, on site: ChessSite) async throws -> [GameSummary] {
+    /// The newest rated games of one speed (for example blitz), newest first.
+    /// If the player has fewer than `limit` games of that speed you simply get fewer back.
+    static func recentGames(for username: String, on site: ChessSite, speed: TimeControl, limit: Int = pageSize) async throws -> [GameSummary] {
         let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let games = switch site {
-        case .chessCom: try await chessComGames(for: name)
-        case .lichess: try await lichessGames(for: name)
+        case .chessCom: try await chessComGames(for: name, speed: speed, limit: limit)
+        case .lichess: try await lichessGames(for: name, speed: speed, limit: limit)
         }
-        guard !games.isEmpty else { throw FetchError.noGames }
+        guard !games.isEmpty else { throw FetchError.noGamesOfSpeed(speed) }
         return games
+    }
+
+    /// How many rated games a player has played at each speed, over their whole history.
+    /// Used to show only the speeds they actually play, and to pick the most-played one.
+    static func gameCounts(for username: String, on site: ChessSite) async throws -> [TimeControl: Int] {
+        let name = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch site {
+        case .chessCom: return try await chessComCounts(for: name)
+        case .lichess: return try await lichessCounts(for: name)
+        }
     }
 
     // MARK: Chess.com
 
     /// Chess.com groups games by month. We read the list of months,
     /// then load the newest months until we have enough games.
-    private static func chessComGames(for username: String) async throws -> [GameSummary] {
+    private static func chessComGames(for username: String, speed: TimeControl, limit: Int) async throws -> [GameSummary] {
         let user = username.lowercased()
         guard let encoded = user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let archivesURL = URL(string: "https://api.chess.com/pub/player/\(encoded)/games/archives")
@@ -45,15 +61,35 @@ enum GameFetcher {
         let archives = try await get(ChessComArchives.self, from: archivesURL, username: username)
 
         var games: [GameSummary] = []
-        for monthURL in archives.archives.reversed().prefix(3) {
+        // Walk back month by month, keeping only rated games of this speed, until we have enough.
+        for monthURL in archives.archives.reversed().prefix(maxMonths) {
             guard let url = URL(string: monthURL) else { continue }
             let month = try await get(ChessComMonth.self, from: url, username: username)
             games += month.games
-                .filter { $0.rules == "chess" && $0.pgn != nil }
+                .filter { $0.rules == "chess" && $0.pgn != nil && $0.rated == true }
                 .compactMap { $0.summary(for: user) }
-            if games.count >= maxGames { break }
+                .filter { $0.speed == speed }
+            if games.count >= limit { break }
         }
-        return Array(games.sorted { $0.date > $1.date }.prefix(maxGames))
+        return Array(games.sorted { $0.date > $1.date }.prefix(limit))
+    }
+
+    /// Chess.com's player stats list wins, losses and draws for each speed.
+    private static func chessComCounts(for username: String) async throws -> [TimeControl: Int] {
+        let user = username.lowercased()
+        guard let encoded = user.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://api.chess.com/pub/player/\(encoded)/stats")
+        else { throw FetchError.playerNotFound(username) }
+        let data = try await send(URLRequest(url: url), username: username)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw FetchError.network }
+        var counts: [TimeControl: Int] = [:]
+        for (key, value) in object where key.hasPrefix("chess_") {
+            guard let speed = TimeControl.from(siteSpeed: String(key.dropFirst(6))),
+                  let record = (value as? [String: Any])?["record"] as? [String: Any] else { continue }
+            let total = ["win", "loss", "draw"].reduce(0) { $0 + ((record[$1] as? Int) ?? 0) }
+            if total > 0 { counts[speed, default: 0] += total }
+        }
+        return counts
     }
 
     private struct ChessComArchives: Decodable {
@@ -71,6 +107,7 @@ enum GameFetcher {
         }
         let url: String
         let pgn: String?
+        let rated: Bool?
         let time_control: String
         let time_class: String
         let end_time: TimeInterval
@@ -101,6 +138,7 @@ enum GameFetcher {
                 outcome: outcome,
                 date: Date(timeIntervalSince1970: end_time),
                 timeControl: timeControl,
+                speed: TimeControl.from(siteSpeed: time_class) ?? .classical,
                 pgn: pgn
             )
         }
@@ -109,9 +147,10 @@ enum GameFetcher {
     // MARK: Lichess
 
     /// Lichess sends one game per line (a format called NDJSON).
-    private static func lichessGames(for username: String) async throws -> [GameSummary] {
+    private static func lichessGames(for username: String, speed: TimeControl, limit: Int) async throws -> [GameSummary] {
+        // Lichess can filter by speed and by rated games itself, so we only download what we want.
         guard let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "https://lichess.org/api/games/user/\(encoded)?max=\(maxGames)&pgnInJson=true&clocks=true")
+              let url = URL(string: "https://lichess.org/api/games/user/\(encoded)?max=\(limit)&rated=true&perfType=\(speed.lichessPerfTypes)&pgnInJson=true&clocks=true")
         else { throw FetchError.playerNotFound(username) }
 
         var request = URLRequest(url: url)
@@ -124,6 +163,27 @@ enum GameFetcher {
             .compactMap { try? JSONDecoder().decode(LichessGame.self, from: Data($0.utf8)) }
             .filter { $0.variant == "standard" || $0.variant == "fromPosition" }
             .compactMap { $0.summary(for: user) }
+            // Lichess sometimes sends a few more than asked for, so trim to what we want.
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    /// Lichess's user profile lists how many games the player has at each speed.
+    private static func lichessCounts(for username: String) async throws -> [TimeControl: Int] {
+        guard let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "https://lichess.org/api/user/\(encoded)")
+        else { throw FetchError.playerNotFound(username) }
+        let data = try await send(URLRequest(url: url), username: username)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw FetchError.network }
+        // Closed or brand-new accounts have no stats; that just means no games.
+        guard let perfs = object["perfs"] as? [String: Any] else { return [:] }
+        var counts: [TimeControl: Int] = [:]
+        for (key, value) in perfs {
+            guard let speed = TimeControl.from(siteSpeed: key),
+                  let games = (value as? [String: Any])?["games"] as? Int, games > 0 else { continue }
+            counts[speed, default: 0] += games
+        }
+        return counts
     }
 
     private struct LichessGame: Decodable {
@@ -170,6 +230,7 @@ enum GameFetcher {
                 outcome: outcome,
                 date: Date(timeIntervalSince1970: createdAt / 1000),
                 timeControl: TimeControlText.make(speed: speed, initialSeconds: clock?.initial, incrementSeconds: clock?.increment),
+                speed: TimeControl.from(siteSpeed: speed) ?? .classical,
                 pgn: pgn
             )
         }

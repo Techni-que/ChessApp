@@ -66,6 +66,9 @@ final class AnalysisCenter {
         startWorkerIfNeeded()
     }
 
+    /// Forgets games that are still waiting (not the one open on screen), for when a new list of games is loaded.
+    func clearWaiting() { queue.removeAll { !$0.urgent } }
+
     /// Stops background analysis. The game being analysed goes back in the queue.
     func pause() { isPaused = true }
 

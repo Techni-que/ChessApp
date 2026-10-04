@@ -22,6 +22,8 @@ struct GameSummary: Identifiable, Hashable {
     let date: Date
     /// For example "Blitz · 3+2".
     let timeControl: String
+    /// The speed group (bullet, blitz, rapid or classical).
+    let speed: TimeControl
     let pgn: String
 }
 

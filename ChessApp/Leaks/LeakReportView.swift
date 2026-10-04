@@ -4,6 +4,7 @@ import SwiftUI
 struct LeakReportView: View {
     let report: LeakReport
     @State private var path: [LoadedGameRoute] = []
+    @State private var drilling: Leak?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -26,9 +27,9 @@ struct LeakReportView: View {
                     }
 
                     ForEach(Array(report.leaks.enumerated()), id: \.element.id) { index, leak in
-                        LeakCard(rank: index + 1, leak: leak) { example in
+                        LeakCard(rank: index + 1, leak: leak, open: { example in
                             path.append(LoadedGameRoute(game: example.game, startIndex: example.ply))
-                        }
+                        }, drill: { drilling = leak })
                     }
                 }
                 .padding()
@@ -37,6 +38,9 @@ struct LeakReportView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+            .navigationDestination(item: $drilling) { leak in
+                DrillSessionView(leak: leak, playerRating: report.playerRating)
             }
             .navigationDestination(for: LoadedGameRoute.self) { route in
                 GameViewerView(game: route.game, startIndex: route.startIndex)
@@ -49,6 +53,7 @@ private struct LeakCard: View {
     let rank: Int
     let leak: Leak
     let open: (LeakExample) -> Void
+    let drill: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -89,6 +94,19 @@ private struct LeakCard: View {
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
+            }
+
+            let score = DrillStats.score(for: leak.kind)
+            Button(action: drill) {
+                Label("Drill this leak", systemImage: "scope")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
+            if score.right + score.wrong > 0 {
+                Text("Practised so far: \(score.right) right, \(score.wrong) wrong")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding()

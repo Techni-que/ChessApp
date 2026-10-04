@@ -33,6 +33,8 @@ Any added dependency must be GPLv3-compatible.
 - `ChessApp/ChessBoardView.swift` — draws the board and pieces.
 - `ChessApp/Analysis/` — Stockfish analysis: `StockfishEvaluator` (talks to the engine), `AnalysisCenter` (queue, progress, results), `GameAnalysis` (scores, mistake/blunder rules: 1+ pawn lost = mistake, 2+ = blunder).
 - `ChessApp/Leaks/` — Step 4 report: `LeakReport.swift` (finds the player's recurring mistakes in analysed games, ranks by total cost; unlocks at 10 analysed games) and `LeakReportView.swift` (the cards, with examples that open on the board).
+- `ChessApp/Drills/` — Step 5: `DrillModels.swift` (puzzle loader, drill stats saved on the phone), `DrillSessionModel.swift` (10-question sessions mixing the player's own mistakes with puzzles), `DrillSessionView.swift`.
+- `ChessApp/Puzzles/puzzles.csv` — ~6,000 puzzles rated 1000-2000 trimmed from the free Lichess puzzle database (https://database.lichess.org, CC0 / public domain). Columns as in the original CSV.
 - `ChessApp/EvalBarView.swift` — the eval bar next to the board.
 - `scripts/download-stockfish-nets.sh` — fetches the Stockfish network files.
 - `ChessApp/PastePGNView.swift` — backup option: paste a PGN.

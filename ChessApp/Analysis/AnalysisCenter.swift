@@ -29,7 +29,7 @@ final class AnalysisCenter {
     private let deepDepth = 16
     private let deepMilliseconds = 500
 
-    private let evaluator = StockfishEvaluator()
+    let evaluator = StockfishEvaluator()
 
     /// Finished analyses are saved here so they survive closing the app and are never redone.
     private static let saveURL: URL = {
@@ -156,7 +156,7 @@ final class AnalysisCenter {
     }
 
     /// Turns an engine move like "g1f3" into normal chess notation like "Nf3".
-    private static func san(for uci: String, in position: Position) -> String? {
+    static func san(for uci: String, in position: Position) -> String? {
         guard uci.count >= 4 else { return nil }
         let start = Square(String(uci.prefix(2)))
         let end = Square(String(uci.dropFirst(2).prefix(2)))

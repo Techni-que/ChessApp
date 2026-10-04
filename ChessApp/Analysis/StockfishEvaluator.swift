@@ -14,6 +14,25 @@ actor StockfishEvaluator {
         var eval: Evaluation
         /// Stockfish's best move in UCI form, e.g. "e2e4" (nil if the game is over).
         var bestMove: String?
+        /// The line Stockfish expects, as engine moves like ["e2e4", "e7e5"].
+        var line: [String] = []
+    }
+
+    // The engine can only think about one position at a time. Anything that wants it
+    // (the background analysis, a drill) waits its turn here.
+    private var isBusy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    private func acquire() async {
+        if isBusy {
+            await withCheckedContinuation { waiting.append($0) }
+        } else {
+            isBusy = true
+        }
+    }
+
+    private func release() {
+        if waiting.isEmpty { isBusy = false } else { waiting.removeFirst().resume() }
     }
 
     /// Hands out engine messages one at a time, so a wait can be raced against a timer.
@@ -57,6 +76,8 @@ actor StockfishEvaluator {
 
     /// Tells the engine a new game is starting, so it forgets the previous one.
     func newGame() async {
+        await acquire()
+        defer { release() }
         guard await startIfNeeded() else { return }
         await engine.send(command: .ucinewgame)
         _ = await waitUntilReady(timeout: 5)
@@ -83,6 +104,12 @@ actor StockfishEvaluator {
     /// - parameter depth: How many moves ahead Stockfish looks.
     /// - parameter maxMilliseconds: Hard time limit, so long games still finish quickly.
     func evaluate(_ position: Position, depth: Int, maxMilliseconds: Int) async -> Result? {
+        await acquire()
+        defer { release() }
+        return await run(position, depth: depth, maxMilliseconds: maxMilliseconds)
+    }
+
+    private func run(_ position: Position, depth: Int, maxMilliseconds: Int) async -> Result? {
         let whiteToMove = position.sideToMove == .white
 
         // Finished games need no engine: checkmate and stalemate have fixed scores.
@@ -103,6 +130,7 @@ actor StockfishEvaluator {
         var bestScore: EngineResponse.Info.Score?
         var bestDepth = -1
         var bestMove: String?
+        var bestLine: [String] = []
 
         // The engine should answer within its time limit; allow some slack, then ask it to stop.
         var wait = Double(maxMilliseconds) / 1000 + 2
@@ -128,6 +156,7 @@ actor StockfishEvaluator {
                score.lowerbound != true, score.upperbound != true,
                (info.depth ?? 0) >= bestDepth {
                 bestScore = score
+                bestLine = info.pv ?? []
                 bestDepth = info.depth ?? 0
             } else if case let .bestmove(move, _) = response,
                       move == "(none)" || Self.isOwnMove(move, in: position) {
@@ -149,7 +178,7 @@ actor StockfishEvaluator {
         } else {
             eval = .centipawns(Int(bestScore.cp ?? 0) * sign)
         }
-        return Result(eval: eval, bestMove: bestMove)
+        return Result(eval: eval, bestMove: bestMove, line: bestLine)
     }
 
     /// True if a UCI move like "e2e4" starts on a square holding a piece of the side to move.

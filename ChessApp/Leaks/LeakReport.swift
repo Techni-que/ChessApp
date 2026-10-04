@@ -63,8 +63,25 @@ struct LeakExample: Identifiable {
     let cost: Int
 }
 
+/// One of the player's own mistakes, ready to be turned into a drill question.
+struct DrillSpot {
+    let game: LoadedGame
+    /// The move that was the mistake (the position before it is what the drill shows).
+    let ply: Int
+    let gameLabel: String
+    let playedMove: String
+    /// The move Stockfish preferred, in normal notation.
+    let betterMove: String
+    /// Evaluation just before the move, from the player's side (hundredths of a pawn, capped at 5 pawns).
+    let evalBefore: Int
+    let playerIsWhite: Bool
+}
+
 /// One card in the report.
-struct Leak: Identifiable {
+struct Leak: Identifiable, Hashable {
+    static func == (lhs: Leak, rhs: Leak) -> Bool { lhs.kind == rhs.kind }
+    func hash(into hasher: inout Hasher) { hasher.combine(kind) }
+
     var id: LeakKind { kind }
     let kind: LeakKind
     /// Title, adjusted when one game phase dominates (e.g. "...in the middlegame").
@@ -74,6 +91,8 @@ struct Leak: Identifiable {
     /// Total evaluation given away by this leak, in hundredths of a pawn.
     let totalCost: Int
     let examples: [LeakExample]
+    /// All of the player's own mistakes of this kind (up to 8), used by the drills.
+    var spots: [DrillSpot] = []
 
     /// Average cost in pawns per game where it happened, e.g. "3.4".
     var pawnsPerGame: String {
@@ -86,6 +105,8 @@ struct LeakReport: Identifiable {
     let id = UUID()
     let leaks: [Leak]
     let gamesAnalysed: Int
+    /// The player's rating, averaged from the games (1400 if the games don't say).
+    var playerRating = 1400
 }
 
 /// Looks through analysed games for the mistakes this player repeats.
@@ -193,6 +214,20 @@ enum LeakDetector {
 
         var leaks: [Leak] = []
 
+        func spot(_ gameIndex: Int, _ ply: Int) -> DrillSpot? {
+            let item = games[gameIndex]
+            guard let better = item.analysis.betterMoves[ply], ply < item.game.moveNames.count else { return nil }
+            let isWhite = item.summary.playedWhite
+            let value = item.analysis.evals[ply - 1].cappedCentipawns
+            // The move text without its number, e.g. "27... Qd4" becomes "Qd4".
+            let played = item.game.moveNames[ply].split(separator: " ").last.map(String.init) ?? ""
+            return DrillSpot(game: item.game, ply: ply, gameLabel: label(item.summary), playedMove: played,
+                             betterMove: better, evalBefore: isWhite ? value : -value, playerIsWhite: isWhite)
+        }
+        func spots(for entries: [(game: Int, ply: Int, cost: Int)]) -> [DrillSpot] {
+            entries.sorted { $0.cost > $1.cost }.compactMap { spot($0.game, $0.ply) }.prefix(8).map { $0 }
+        }
+
         func example(_ error: Slip) -> LeakExample {
             let item = games[error.gameIndex]
             let better = item.analysis.betterMoves[error.ply]
@@ -211,8 +246,9 @@ enum LeakDetector {
             // Best examples: the costliest, one per game.
             var seen = Set<Int>()
             let top = errors.sorted { $0.loss > $1.loss }.filter { seen.insert($0.gameIndex).inserted }.prefix(3)
+            let allSpots = spots(for: errors.map { ($0.gameIndex, $0.ply, $0.loss) })
             leaks.append(Leak(kind: kind, title: title ?? kind.title, gamesAffected: gameSet.count, gamesChecked: checked,
-                              totalCost: errors.reduce(0) { $0 + $1.loss }, examples: top.map(example)))
+                              totalCost: errors.reduce(0) { $0 + $1.loss }, examples: top.map(example), spots: allSpots))
         }
 
         // Hanging pieces: name the game phase where most of the damage happens.
@@ -233,7 +269,8 @@ enum LeakDetector {
                                    cost: entry.cost)
             }
             leaks.append(Leak(kind: .notConverting, title: LeakKind.notConverting.title, gamesAffected: convertExamples.count,
-                              gamesChecked: games.count, totalCost: convertExamples.reduce(0) { $0 + $1.cost }, examples: Array(examples)))
+                              gamesChecked: games.count, totalCost: convertExamples.reduce(0) { $0 + $1.cost }, examples: Array(examples),
+                              spots: spots(for: convertExamples.map { ($0.game, $0.ply, $0.cost) })))
         }
 
         if !driftExamples.isEmpty {
@@ -245,7 +282,8 @@ enum LeakDetector {
                                    cost: entry.cost)
             }
             leaks.append(Leak(kind: .middlegameDrift, title: LeakKind.middlegameDrift.title, gamesAffected: driftExamples.count,
-                              gamesChecked: games.count, totalCost: driftExamples.reduce(0) { $0 + $1.cost }, examples: Array(examples)))
+                              gamesChecked: games.count, totalCost: driftExamples.reduce(0) { $0 + $1.cost }, examples: Array(examples),
+                              spots: spots(for: driftExamples.map { ($0.game, $0.ply, $0.cost) })))
         }
 
         // Skipped silently if no game came with clock times.
@@ -256,10 +294,19 @@ enum LeakDetector {
         // Only keep leaks that repeat, then rank by how much they cost in total.
         let recurring = leaks.filter { $0.gamesAffected >= 2 }
         let ranked = recurring.sorted { $0.totalCost > $1.totalCost }
-        return LeakReport(leaks: Array(ranked.prefix(3)), gamesAnalysed: games.count)
+        return LeakReport(leaks: Array(ranked.prefix(3)), gamesAnalysed: games.count, playerRating: rating(of: games))
     }
 
     // MARK: - Helpers
+
+    /// The player's average rating, from the Elo tags in their games.
+    private static func rating(of games: [AnalysedGame]) -> Int {
+        let ratings = games.compactMap { item -> Int? in
+            Int(item.game.tags[item.summary.playedWhite ? "WhiteElo" : "BlackElo"] ?? "")
+        }
+        guard !ratings.isEmpty else { return 1400 }
+        return ratings.reduce(0, +) / ratings.count
+    }
 
     private static func label(_ summary: GameSummary) -> String {
         "\(summary.outcome.rawValue) vs \(summary.opponent), \(summary.date.formatted(date: .abbreviated, time: .omitted))"

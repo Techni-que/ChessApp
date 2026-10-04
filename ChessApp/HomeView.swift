@@ -15,6 +15,9 @@ struct HomeView: View {
     @State private var speedCounts: [TimeControl: Int] = [:]
     /// How many games we've asked for so far (20, then 40 after "Load 20 more", ...).
     @State private var gameLimit = GameFetcher.pageSize
+    /// The number of games asked for in the last fetch that FINISHED. The footer and the
+    /// "Load more" button use this, so they don't flicker while a new fetch is still running.
+    @State private var fetchedLimit = GameFetcher.pageSize
     /// Bumped on every new request so a slow, outdated answer can't overwrite a newer one.
     @State private var requestID = 0
     @State private var isLoading = false
@@ -85,7 +88,7 @@ struct HomeView: View {
                             }
                             .foregroundStyle(.primary)
                         }
-                        if games.count >= gameLimit {
+                        if games.count >= fetchedLimit {
                             Button(action: loadMore) {
                                 HStack {
                                     Text("Load \(GameFetcher.pageSize) more")
@@ -100,7 +103,8 @@ struct HomeView: View {
                     } header: {
                         Text("Recent \(speed.sentenceName) games")
                     } footer: {
-                        if games.count < gameLimit {
+                        // Only once a fetch has finished and came back short, meaning the history ran out.
+                        if !isLoading && games.count < fetchedLimit {
                             Text(shortfallText)
                         }
                     }
@@ -199,6 +203,7 @@ struct HomeView: View {
                 let loaded = try await GameFetcher.recentGames(for: name, on: chosenSite, speed: chosenSpeed, limit: limit)
                 guard thisRequest == requestID else { return }
                 games = loaded
+                fetchedLimit = limit
                 // Games already analysed are remembered, so switching back and forth costs nothing.
                 analysisCenter.clearWaiting()
                 analyseAll()

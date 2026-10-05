@@ -68,7 +68,11 @@ private struct LeakCard: View {
                 }
             }
 
-            Text("Happens in \(leak.gamesAffected) of \(leak.gamesChecked) games · costs about \(leak.pawnsPerGame) pawns each time")
+            if let breakdown = leak.breakdown {
+                Text(breakdown).font(.subheadline.weight(.semibold))
+            }
+
+            Text("Happens in \(leak.gamesAffected) of \(leak.gamesChecked) games · costs about \(leak.pawnsPerGame) pawns per game")
                 .font(.subheadline.weight(.semibold))
 
             Text(leak.kind.explanation)

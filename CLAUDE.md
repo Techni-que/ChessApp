@@ -69,3 +69,14 @@ xcodebuild -project ChessApp.xcodeproj -scheme ChessApp -destination 'platform=i
 - Starting speed: a speed the player has picked themselves wins; otherwise the speed with the most rated games in the last 3 months; otherwise their all-time most-played.
 - Decided NOT to build: "Just for fun" speed toggle, "Not a real game" option, game tags, an all-vs-serious toggle, outlier prompts.
 - Later ideas: side-by-side "top leak by speed" card (never a blended report), cross-speed tilt signal, spaced repetition + Today screen, progress by games (not dates).
+- [x] Step 7: leak accuracy. Missed tactics now come from Stockfish's best line (not the first move), labelled Fork / Pin / Checkmate / Other; missed mates (mate in 1-3) use the uncapped mate score. New leaks: "Not punishing your opponent's blunders" and "Rushing your moves". Old saved analyses lack Stockfish's lines and are redone automatically.
+
+## Leak thresholds (first guesses, tune with real players)
+All live in `ChessApp/Leaks/LeakReport.swift` unless noted. Mistake = lose 1+ pawn, blunder = lose 2+ (`GameAnalysis.swift`). Scores are capped at +/-5 pawns except mates.
+- Hanging pieces: a blunder AND material down 2+ points within the next move or two.
+- Missed tactics: lost 1.5+ pawns AND Stockfish's best line wins 2+ points of material within 4 plies (judged after the opponent's reply). Type: Fork = the moved piece attacks 2+ non-pawn enemies and none of equal or lower value can take it; Pin = bishop/rook/queen with a more valuable piece (or king) directly behind; otherwise Other (`TacticFinder.swift`). Missed mate = Stockfish had mate in <= 3 and the move played gave it up (counts as 3 pawns of cost).
+- Not converting: peaked at +2 or better and didn't win. Drift: moves 15-30, no single mistake, small losses add up to 1+ pawn and the position slides 1.5+ pawns.
+- Time trouble: error with clock under max(8 s, 12% of the starting time). Rushed: mistake played in under 2.5 s with more than 30% of the starting time left (increments counted). Both skipped for Daily or without clock data.
+- Not punishing: opponent's move gave away 2+ pawns and your reply lost 1+ pawn and more than half of that gain.
+- A leak needs 2+ games to show; the top 3 by total cost are shown. Rushing drills lock the board for 5 s (`DrillSessionModel.rushPauseSeconds`).
+

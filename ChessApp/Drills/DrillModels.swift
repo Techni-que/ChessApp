@@ -14,17 +14,6 @@ struct Puzzle: Identifiable {
 /// Finds puzzles that fit a leak. Puzzles come from `puzzles.csv`, bundled with the app.
 /// If that file is missing the drills simply use the player's own mistakes.
 enum PuzzleLibrary {
-    /// Lichess puzzle themes that train each leak.
-    static func themes(for leak: LeakKind) -> Set<String> {
-        switch leak {
-        case .hangingPieces: ["hangingPiece", "trappedPiece"]
-        case .missedTactics: ["fork", "pin", "skewer", "discoveredAttack", "doubleCheck"]
-        case .notConverting: ["advantage", "crushing", "endgame"]
-        case .middlegameDrift: ["quietMove", "defensiveMove"]
-        case .timeTrouble: ["short", "oneMove"]
-        }
-    }
-
     private static let all: [Puzzle] = {
         guard let url = Bundle.main.url(forResource: "puzzles", withExtension: "csv"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
@@ -40,10 +29,9 @@ enum PuzzleLibrary {
 
     static var isAvailable: Bool { !all.isEmpty }
 
-    /// Puzzles for a leak, closest to the player's rating first (within about 200 points).
-    static func pick(for leak: LeakKind, rating: Int, count: Int) -> [Puzzle] {
+    /// Puzzles with any of these themes, near the player's rating (within about 200 points), in random order.
+    static func pick(themes wanted: Set<String>, rating: Int, count: Int) -> [Puzzle] {
         guard count > 0 else { return [] }
-        let wanted = themes(for: leak)
         let target = min(max(rating, 1000), 2000)
         let close = all.filter { abs($0.rating - target) <= 200 && !$0.themes.isDisjoint(with: wanted) }
         return Array(close.shuffled().prefix(count))

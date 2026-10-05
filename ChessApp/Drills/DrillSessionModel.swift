@@ -30,6 +30,11 @@ final class DrillSessionModel {
     private(set) var wrongTries = 0
     /// Which side is at the bottom of the board for this question.
     private(set) var flipped = false
+    /// Seconds left of the forced pause (only used for the "Rushing your moves" drills).
+    private(set) var pauseLeft = 0
+    private var pauseTask: Task<Void, Never>?
+    /// How long "Rushing your moves" drills make you look before you can move.
+    static let rushPauseSeconds = 5
 
     /// Moves still to play in the current puzzle (yours, then theirs, and so on).
     private var puzzleMoves: [String] = []
@@ -43,7 +48,7 @@ final class DrillSessionModel {
     init(leak: Leak, playerRating: Int) {
         self.leak = leak
         let own = Array(leak.spots.shuffled().prefix(PuzzleLibrary.isAvailable ? 5 : 10))
-        let puzzles = PuzzleLibrary.pick(for: leak.kind, rating: playerRating, count: 10 - own.count)
+        let puzzles = PuzzleLibrary.pick(themes: leak.themes.isEmpty ? leak.kind.puzzleThemes : leak.themes, rating: playerRating, count: 10 - own.count)
         var mixed: [DrillQuestion] = []
         var ownQuestions = own.map { DrillQuestion(leak: leak.kind, source: .ownMistake($0)) }
         var puzzleQuestions = puzzles.map { DrillQuestion(leak: leak.kind, source: .puzzle($0)) }
@@ -87,6 +92,9 @@ final class DrillSessionModel {
         message = ""
         phase = .asking
         puzzleMoves = []
+        pauseTask?.cancel()
+        pauseLeft = 0
+        if leak.kind == .rushedMoves { startPause(seconds: Self.rushPauseSeconds) }
 
         switch question.source {
         case .ownMistake(let spot):
@@ -117,8 +125,20 @@ final class DrillSessionModel {
         return move
     }
 
+    /// Counts down a few seconds during which the board can't be touched.
+    private func startPause(seconds: Int) {
+        pauseLeft = seconds
+        pauseTask = Task {
+            while pauseLeft > 0 {
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { return }
+                pauseLeft -= 1
+            }
+        }
+    }
+
     func handleTap(_ square: Square) {
-        guard phase == .asking else { return }
+        guard phase == .asking, pauseLeft == 0 else { return }
         let mover = board.position.sideToMove
         if let from = selected {
             if square == from {
@@ -200,6 +220,16 @@ final class DrillSessionModel {
                 wrong("I couldn't check that move. Try another.")
                 return
             }
+            if spot.requiresMate {
+                // The right answer here is a forced checkmate, so a merely good move isn't enough.
+                guard case .mate(let moves) = result.eval, spot.playerIsWhite ? moves > 0 : moves < 0 else {
+                    wrong("That doesn't win by force. Look for checkmate.")
+                    return
+                }
+                board = Board(position: after)
+                solved("Yes, that still forces checkmate. Good find.")
+                return
+            }
             let value = result.eval.cappedCentipawns
             let mine = spot.playerIsWhite ? value : -value
             if spot.evalBefore - mine <= 30 {
@@ -274,6 +304,7 @@ final class DrillSessionModel {
     }
 
     func next() {
+        pauseTask?.cancel()
         index += 1
         loadQuestion()
     }

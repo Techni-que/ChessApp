@@ -49,9 +49,9 @@ struct DrillSessionView: View {
                            onTap: { model.handleTap($0) })
 
             VStack(spacing: 4) {
-                Text(model.message)
+                Text(model.pauseLeft > 0 ? "Wait \(model.pauseLeft)… Look at every check, capture and threat first." : model.message)
                     .font(.headline)
-                    .foregroundStyle(feedbackColor)
+                    .foregroundStyle(model.pauseLeft > 0 ? Color.secondary : feedbackColor)
                     .multilineTextAlignment(.center)
                 if let line = model.answerText {
                     Text(line).font(.subheadline.monospaced()).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -65,7 +65,7 @@ struct DrillSessionView: View {
             } else {
                 Button("I give up, show me") { model.reveal() }
                     .font(.footnote)
-                    .disabled(model.phase == .thinking)
+                    .disabled(model.phase == .thinking || model.pauseLeft > 0)
             }
             Spacer(minLength: 0)
         }

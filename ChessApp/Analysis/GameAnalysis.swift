@@ -62,6 +62,9 @@ struct GameAnalysis: Codable {
     var betterMoves: [String?]
     /// True if White made the first move (false for games set up with Black to move).
     var startsWithWhite: Bool
+    /// For each position, Stockfish's best line from there (up to 6 engine moves like "e2e4").
+    /// Analyses saved by older versions of the app don't have this, so they get redone.
+    var lines: [[String]]?
 
     struct Counts: Hashable {
         var mistakes = 0

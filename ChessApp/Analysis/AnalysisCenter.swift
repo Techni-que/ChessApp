@@ -41,7 +41,9 @@ final class AnalysisCenter {
     init() {
         if let data = try? Data(contentsOf: Self.saveURL),
            let saved = try? JSONDecoder().decode([String: GameAnalysis].self, from: data) {
-            results = saved
+            // Older saved analyses lack Stockfish's best lines, which the leak report now needs.
+            // Dropping them makes those games get analysed again.
+            results = saved.filter { $0.value.lines != nil }
         }
     }
 
@@ -104,6 +106,7 @@ final class AnalysisCenter {
         let positions = game.positions
         var evals: [Evaluation] = []
         var bestMoves: [String?] = []
+        var lines: [[String]] = []
         await evaluator.newGame()
 
         // Pass 1: a quick look at every position.
@@ -112,6 +115,7 @@ final class AnalysisCenter {
             let result = await evaluator.evaluate(position, depth: quickDepth, maxMilliseconds: quickMilliseconds)
             evals.append(result?.eval ?? evals.last ?? .centipawns(0))
             bestMoves.append(result?.bestMove)
+            lines.append(Self.bestLine(result))
             progress[key] = 0.85 * Double(index + 1) / Double(positions.count)
         }
 
@@ -128,6 +132,7 @@ final class AnalysisCenter {
                 if let result = await evaluator.evaluate(positions[index], depth: deepDepth, maxMilliseconds: deepMilliseconds) {
                     evals[index] = result.eval
                     bestMoves[index] = result.bestMove
+                    lines[index] = Self.bestLine(result)
                 }
                 deepened.insert(index)
                 progress[key] = min(0.99, 0.85 + 0.15 * Double(step + 1) / Double(toDeepen.count))
@@ -143,7 +148,8 @@ final class AnalysisCenter {
             evals: evals,
             judgements: judgements,
             betterMoves: betterMoves,
-            startsWithWhite: positions.first?.sideToMove != .black
+            startsWithWhite: positions.first?.sideToMove != .black,
+            lines: lines
         )
     }
 
@@ -158,16 +164,15 @@ final class AnalysisCenter {
         return judgements
     }
 
+    /// Stockfish's best line, kept short (6 moves is plenty to see what a tactic wins).
+    private static func bestLine(_ result: StockfishEvaluator.Result?) -> [String] {
+        guard let result else { return [] }
+        if !result.line.isEmpty { return Array(result.line.prefix(6)) }
+        return result.bestMove.map { [$0] } ?? []
+    }
+
     /// Turns an engine move like "g1f3" into normal chess notation like "Nf3".
     static func san(for uci: String, in position: Position) -> String? {
-        guard uci.count >= 4 else { return nil }
-        let start = Square(String(uci.prefix(2)))
-        let end = Square(String(uci.dropFirst(2).prefix(2)))
-        var board = Board(position: position)
-        guard var move = board.move(pieceAt: start, to: end) else { return nil }
-        if uci.count == 5, let kind = Piece.Kind(rawValue: uci.suffix(1).uppercased()) {
-            move = board.completePromotion(of: move, to: kind)
-        }
-        return move.san
+        UCIMove.san(for: uci, in: position)
     }
 }

@@ -339,6 +339,17 @@ enum LeakDetector {
                                moveText: item.game.moveNames[event.ply], detail: detail, cost: event.cost)
         }
 
+        // One move, one card. Order of priority: hanging pieces, then missed tactics with a named type
+        // (checkmate, fork, pin), then "not punishing", then missed tactics labelled "other".
+        // The remaining leaks (time, rushing, drift, converting) describe different things and can overlap.
+        func key(_ event: Event) -> String { "\(event.gameIndex)-\(event.ply)" }
+        var claimed = Set(hangs.map(key))
+        let namedTactics = tactics.filter { ($0.tactic ?? .other) != .other }
+        claimed.formUnion(namedTactics.map(key))
+        notPunishing = notPunishing.filter { !claimed.contains(key($0)) }
+        claimed.formUnion(notPunishing.map(key))
+        tactics = tactics.filter { ($0.tactic ?? .other) != .other || !claimed.contains(key($0)) }
+
         var leaks: [Leak] = []
         func add(_ kind: LeakKind, title: String? = nil, events: [Event], checked: Int, breakdown: String? = nil, themes: Set<String> = []) {
             guard !events.isEmpty else { return }

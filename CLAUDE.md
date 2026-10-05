@@ -78,5 +78,6 @@ All live in `ChessApp/Leaks/LeakReport.swift` unless noted. Mistake = lose 1+ pa
 - Not converting: peaked at +2 or better and didn't win. Drift: moves 15-30, no single mistake, small losses add up to 1+ pawn and the position slides 1.5+ pawns.
 - Time trouble: error with clock under max(8 s, 12% of the starting time). Rushed: mistake played in under 2.5 s with more than 30% of the starting time left (increments counted). Both skipped for Daily or without clock data.
 - Not punishing: opponent's move gave away 2+ pawns and your reply lost 1+ pawn and more than half of that gain.
+- One move lands on one card: hanging pieces > missed tactics with a named type (checkmate/fork/pin) > not punishing > missed tactics labelled other. Time trouble, rushing, drift and converting can still overlap with these.
 - A leak needs 2+ games to show; the top 3 by total cost are shown. Rushing drills lock the board for 5 s (`DrillSessionModel.rushPauseSeconds`).
 

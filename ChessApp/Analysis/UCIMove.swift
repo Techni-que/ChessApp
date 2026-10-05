@@ -21,4 +21,23 @@ enum UCIMove {
         var board = Board(position: position)
         return play(uci, on: &board)?.san
     }
+
+    /// Finds the engine move (like "g1f3") for a move written in normal notation (like "Nf3").
+    static func uci(forSAN san: String, in position: Position) -> String? {
+        let target = san.filter { $0 != "+" && $0 != "#" }
+        let start = Board(position: position)
+        for piece in position.pieces where piece.color == position.sideToMove {
+            for destination in start.legalMoves(forPieceAt: piece.square) {
+                var board = start
+                guard var move = board.move(pieceAt: piece.square, to: destination) else { continue }
+                var uci = piece.square.notation + destination.notation
+                if case .promotion(let pending) = board.state {
+                    move = board.completePromotion(of: pending, to: .queen)
+                    uci += "q"
+                }
+                if move.san.filter({ $0 != "+" && $0 != "#" }) == target { return uci }
+            }
+        }
+        return nil
+    }
 }

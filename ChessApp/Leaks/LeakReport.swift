@@ -98,6 +98,17 @@ struct DrillSpot {
     let playerIsWhite: Bool
     /// True when the right answer is a forced checkmate, so only a mating move counts.
     var requiresMate = false
+    /// Stockfish's better move as an engine move like "g1f3" (nil if we don't have it).
+    var betterUCI: String?
+    /// Stockfish's best line from the position before the mistake (engine moves, up to 4).
+    var bestLine: [String] = []
+    /// Stockfish's best reply after the move that was played in the game (engine moves, up to 3).
+    var playedLine: [String] = []
+    var tactic: TacticType?
+    /// Moves to mate, for missed-checkmate spots.
+    var mateIn: Int?
+    /// How much the move played lost, in hundredths of a pawn.
+    var loss = 0
 }
 
 /// One card in the report.
@@ -164,6 +175,7 @@ enum LeakDetector {
         var phase: Phase?
         var tactic: TacticType?
         var requiresMate = false
+        var mateIn: Int?
     }
 
     static func report(for games: [AnalysedGame]) -> LeakReport {
@@ -219,7 +231,7 @@ enum LeakDetector {
                     let better = UCIMove.san(for: first, in: positions[ply - 1]) ?? first
                     tactics.append(Event(gameIndex: gameIndex, ply: ply, cost: max(loss(ply), missedMateCost),
                                          detail: "You missed checkmate in \(moves). Better was \(better)", tactic: .checkmate,
-                                         requiresMate: true))
+                                         requiresMate: true, mateIn: moves))
                 }
 
                 guard let judgement = analysis.judgements[ply] else { continue }
@@ -327,9 +339,20 @@ enum LeakDetector {
             let value = item.analysis.evals[event.ply - 1].cappedCentipawns
             // The move text without its number, e.g. "27... Qd4" becomes "Qd4".
             let played = item.game.moveNames[event.ply].split(separator: " ").last.map(String.init) ?? ""
+            let isWhiteSide = isWhite
+            func mineAt(_ ply: Int) -> Int {
+                let value = item.analysis.evals[ply].cappedCentipawns
+                return isWhiteSide ? value : -value
+            }
+            let lines = item.analysis.lines
+            let before = lines?[safe: event.ply - 1] ?? []
             return DrillSpot(game: item.game, ply: event.ply, gameLabel: label(item.summary), playedMove: played,
                              betterMove: better, evalBefore: isWhite ? value : -value, playerIsWhite: isWhite,
-                             requiresMate: event.requiresMate)
+                             requiresMate: event.requiresMate, betterUCI: before.first,
+                             bestLine: Array(before.prefix(4)),
+                             playedLine: Array((lines?[safe: event.ply] ?? []).prefix(3)),
+                             tactic: event.tactic, mateIn: event.mateIn,
+                             loss: max(0, mineAt(event.ply - 1) - mineAt(event.ply)))
         }
 
         func example(_ event: Event) -> LeakExample {

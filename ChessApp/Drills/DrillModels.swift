@@ -38,6 +38,23 @@ enum PuzzleLibrary {
     }
 }
 
+/// How a question went. Spaced repetition will use this later:
+/// pass moves a position up a step, hinted and second-try keep it where it is, revealed sends it back to day 1.
+enum DrillOutcome: String, Codable {
+    case pass, hinted, secondTry, revealed
+
+    var solved: Bool { self != .revealed }
+
+    var label: String {
+        switch self {
+        case .pass: "First try"
+        case .hinted: "With a hint"
+        case .secondTry: "Second try"
+        case .revealed: "Shown the answer"
+        }
+    }
+}
+
 /// One question in a drill session.
 struct DrillQuestion: Identifiable {
     enum Source {
@@ -48,6 +65,59 @@ struct DrillQuestion: Identifiable {
     let id = UUID()
     let leak: LeakKind
     let source: Source
+
+    /// A key that stays the same between launches, so the same position can be recognised later.
+    var stableKey: String {
+        switch source {
+        case .ownMistake(let spot): "own-\(Self.fingerprint(spot.game.pgn))-\(spot.ply)"
+        case .puzzle(let puzzle): "puzzle-\(puzzle.id)"
+        }
+    }
+
+    /// A small text fingerprint (FNV-1a). Swift's own hashValue changes every launch, so we can't use it.
+    static func fingerprint(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return String(hash, radix: 16)
+    }
+}
+
+/// One answered question, saved on the phone for spaced repetition later.
+struct DrillRecord: Codable {
+    let key: String
+    let leak: String
+    let outcome: DrillOutcome
+    let date: Date
+    /// For the player's own mistakes: the game and move, so the position can be rebuilt later.
+    var gamePGN: String?
+    var ply: Int?
+    /// For puzzles: the Lichess puzzle id.
+    var puzzleID: String?
+}
+
+/// The log of answered questions (newest last, capped at 400 so it stays small).
+enum DrillHistory {
+    private static let url: URL = {
+        let folder = URL.applicationSupportDirectory
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appending(path: "drill-history.json")
+    }()
+
+    static func all() -> [DrillRecord] {
+        guard let data = try? Data(contentsOf: url),
+              let records = try? JSONDecoder().decode([DrillRecord].self, from: data) else { return [] }
+        return records
+    }
+
+    static func append(_ record: DrillRecord) {
+        var records = all()
+        records.append(record)
+        if records.count > 400 { records.removeFirst(records.count - 400) }
+        if let data = try? JSONEncoder().encode(records) { try? data.write(to: url, options: .atomic) }
+    }
 }
 
 /// Right and wrong answers per leak, saved on the phone for a future progress screen.

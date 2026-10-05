@@ -34,7 +34,7 @@ Any added dependency must be GPLv3-compatible.
 - `ChessApp/ChessBoardView.swift` — draws the board and pieces.
 - `ChessApp/Analysis/` — Stockfish analysis: `StockfishEvaluator` (talks to the engine), `AnalysisCenter` (queue, progress, results), `GameAnalysis` (scores, mistake/blunder rules: 1+ pawn lost = mistake, 2+ = blunder).
 - `ChessApp/Leaks/` — Step 4 report: `LeakReport.swift` (finds the player's recurring mistakes in analysed games, ranks by total cost; unlocks at 10 analysed games) and `LeakReportView.swift` (the cards, with examples that open on the board).
-- `ChessApp/Drills/` — Step 5: `DrillModels.swift` (puzzle loader, drill stats saved on the phone), `DrillSessionModel.swift` (10-question sessions mixing the player's own mistakes with puzzles), `DrillSessionView.swift`.
+- `ChessApp/Drills/` — Steps 5 and 8 (drill upgrade: forgiving wrong moves, hint, replays, explore mode, results list; `DrillExplainer.swift` holds the one-line explanation templates; outcomes are logged by `DrillHistory` in `drill-history.json` for spaced repetition): `DrillModels.swift` (puzzle loader, drill stats saved on the phone), `DrillSessionModel.swift` (10-question sessions mixing the player's own mistakes with puzzles), `DrillSessionView.swift`.
 - `ChessApp/Puzzles/puzzles.csv` — ~6,000 puzzles rated 1000-2000 trimmed from the free Lichess puzzle database (https://database.lichess.org, CC0 / public domain). Columns as in the original CSV.
 - `ChessApp/EvalBarView.swift` — the eval bar next to the board.
 - `scripts/download-stockfish-nets.sh` — fetches the Stockfish network files.
@@ -80,4 +80,5 @@ All live in `ChessApp/Leaks/LeakReport.swift` unless noted. Mistake = lose 1+ pa
 - Not punishing: opponent's move gave away 2+ pawns and your reply lost 1+ pawn and more than half of that gain.
 - One move lands on one card: hanging pieces > missed tactics with a named type (checkmate/fork/pin) > not punishing > missed tactics labelled other. Time trouble, rushing, drift and converting can still overlap with these.
 - A leak needs 2+ games to show; the top 3 by total cost are shown. Rushing drills lock the board for 5 s (`DrillSessionModel.rushPauseSeconds`).
+- [x] Step 8: drill upgrade. First wrong move snaps back ("Not quite, try again"), second reveals the solution with an arrow that stays; Hint button; each question ends as pass / hinted / second-try / revealed and is saved (`DrillHistory`, for spaced repetition in step 9); "Why your move fails" / "Why the best move works" replays (max 3 moves) plus a one-line template explanation (no AI); back button and swipe between questions (forward only after a result); results list with ticks and crosses where each drill reopens; Explore mode with eval bar and Reset. Rushing 5 s lock and mate-only rule kept.
 

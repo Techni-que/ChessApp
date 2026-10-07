@@ -24,7 +24,7 @@ struct DrillSessionView: View {
                 questionView
             }
         }
-        .navigationTitle(leak.kind.shortTitle)
+        .navigationTitle(leak.group.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -47,6 +47,8 @@ struct DrillSessionView: View {
                                    flipped: model.flipped,
                                    selected: model.selected,
                                    highlights: model.highlights,
+                                   marks: model.phase == .asking ? model.loosePicks : [],
+                                   lastMove: model.lastMove,
                                    arrows: model.arrows,
                                    onTap: { model.handleTap($0) })
                 }
@@ -130,13 +132,24 @@ struct DrillSessionView: View {
                     .buttonStyle(.borderedProminent)
             }
         } else if model.phase == .asking || model.phase == .thinking {
-            HStack(spacing: 16) {
-                Button { model.hint() } label: { Label("Hint", systemImage: "lightbulb") }
-                    .buttonStyle(.bordered)
-                    .disabled(!model.canHint || model.hintUsed)
-                Button("I give up, show me") { model.reveal() }
-                    .font(.footnote)
-                    .disabled(model.phase == .thinking || model.pauseLeft > 0)
+            VStack(spacing: 12) {
+                if model.mode == .looseCheck {
+                    Button("Check") { model.checkLoose() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.loosePicks.isEmpty || model.phase != .asking || model.pauseLeft > 0)
+                } else if model.mode == .leftCheck {
+                    Button("Nothing to punish") { model.claimNothing() }
+                        .buttonStyle(.bordered)
+                        .disabled(model.phase != .asking || model.pauseLeft > 0)
+                }
+                HStack(spacing: 16) {
+                    Button { model.hint() } label: { Label("Hint", systemImage: "lightbulb") }
+                        .buttonStyle(.bordered)
+                        .disabled(!model.canHint || model.hintUsed)
+                    Button("I give up, show me") { model.reveal() }
+                        .font(.footnote)
+                        .disabled(model.phase == .thinking || model.pauseLeft > 0)
+                }
             }
         } else {
             VStack(spacing: 10) {
@@ -203,7 +216,7 @@ struct DrillSessionView: View {
                     }
                 }
 
-                let total = DrillStats.score(for: leak.kind)
+                let total = DrillStats.score(for: leak.group.rawValue)
                 Text("All-time for this leak: \(total.right) solved, \(total.wrong) shown the answer")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -227,7 +240,7 @@ struct DrillSessionView: View {
                 .font(.title3)
                 .foregroundStyle(outcome?.solved == true ? .green : .red)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(index + 1). \(model.isOwnMistake(question) ? "Your own mistake" : "Practice puzzle")")
+                Text("\(index + 1). \(model.name(of: question))")
                     .font(.subheadline.weight(.semibold))
                 Text(model.summary(of: question)).font(.caption).foregroundStyle(.secondary)
             }

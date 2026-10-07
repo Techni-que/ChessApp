@@ -65,6 +65,12 @@ enum DrillExplainer {
                 return "\(best) forks two of the opponent's pieces."
             case .pin:
                 return "\(best) pins an enemy piece to something more valuable."
+            case .skewer:
+                return "\(best) attacks a big piece that has to move, and you win what stands behind it."
+            case .discovery:
+                return "\(best) uncovers an attack from another of your pieces, so your opponent faces two threats at once."
+            case .sacrifice:
+                return "\(best) gives up material first, but the line wins more back."
             default:
                 return "Stockfish's best line wins material, starting with \(best). Your \(played) gave up about \(lost) pawns."
             }

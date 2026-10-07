@@ -8,77 +8,73 @@ struct AnalysedGame {
     let analysis: GameAnalysis
 }
 
-/// The kinds of recurring mistake the report looks for.
-enum LeakKind: String, CaseIterable {
-    case hangingPieces, missedTactics, notConverting, middlegameDrift, timeTrouble, notPunishing, rushedMoves
+/// The four groups the report is organised into. Opening and endgame will join later.
+enum LeakGroup: String, CaseIterable, Hashable {
+    case tactics, advantage, timeManagement, strategy
 
     var title: String {
         switch self {
-        case .hangingPieces: "Leaving pieces hanging"
-        case .missedTactics: "Missing winning tactics"
-        case .notConverting: "Not finishing off winning positions"
-        case .middlegameDrift: "Slowly drifting in the middlegame"
-        case .timeTrouble: "Mistakes when low on time"
-        case .notPunishing: "Not punishing your opponent's blunders"
-        case .rushedMoves: "Rushing your moves"
+        case .tactics: "Tactics"
+        case .advantage: "Advantage capitalisation"
+        case .timeManagement: "Time management"
+        case .strategy: "Strategy"
         }
     }
 
     /// A short name that fits in the navigation bar.
     var shortTitle: String {
         switch self {
-        case .hangingPieces: "Hanging pieces"
-        case .missedTactics: "Missed tactics"
-        case .notConverting: "Converting wins"
-        case .middlegameDrift: "Middlegame drift"
-        case .timeTrouble: "Low on time"
-        case .notPunishing: "Punishing blunders"
-        case .rushedMoves: "Rushed moves"
+        case .tactics: "Tactics"
+        case .advantage: "Advantage"
+        case .timeManagement: "Time management"
+        case .strategy: "Strategy"
         }
     }
 
     var symbol: String {
         switch self {
-        case .hangingPieces: "exclamationmark.triangle.fill"
-        case .missedTactics: "eye.slash.fill"
-        case .notConverting: "flag.slash.fill"
-        case .middlegameDrift: "arrow.down.right"
-        case .timeTrouble: "clock.badge.exclamationmark.fill"
-        case .notPunishing: "gift.fill"
-        case .rushedMoves: "hare.fill"
+        case .tactics: "bolt.fill"
+        case .advantage: "flag.fill"
+        case .timeManagement: "clock.fill"
+        case .strategy: "map.fill"
         }
     }
 
-    /// What it means and why it costs points, in one friendly line.
+    /// What this group means and why it costs points.
     var explanation: String {
         switch self {
-        case .hangingPieces:
-            "Your move let your opponent win a piece or pawn for free. These are the quickest way to lose a game, so check what each piece protects before you move."
-        case .missedTactics:
-            "A winning tactic, like a checkmate, a fork or a pin, was on the board but you played something else. Before each move, look at every check, capture and threat for both sides."
-        case .notConverting:
+        case .tactics:
+            "A winning shot was on the board, or you left something to be taken: hanging pieces, forks, pins, checkmates and more. Before each move, check every capture, check and threat for both sides."
+        case .advantage:
             "You were clearly winning (about 2 pawns ahead or more) but didn't win the game. When ahead, trade pieces, keep things simple and avoid giving counterplay."
-        case .middlegameDrift:
-            "No single blunder, but small slips between moves 15 and 30 slowly gave away your advantage. Have a plan for each move rather than just reacting."
-        case .timeTrouble:
-            "Many of your errors came when your clock was nearly out. Spend less time on the early moves so you have time to think when the game gets sharp."
-        case .notPunishing:
-            "Your opponent made a big mistake, but your reply gave most of the gain back. When they slip, ask what their move left unprotected, grab what's free, then check you're safe."
-        case .rushedMoves:
-            "Many of your mistakes came on moves played in just a couple of seconds while you still had plenty of time. Take a short pause on every move to check captures, checks and threats."
+        case .timeManagement:
+            "Your clock is costing you moves: either you were short of time when it got sharp, or you moved too fast with plenty of time left. Spend your time where the position is tense."
+        case .strategy:
+            "No single blunder, but small slips in quiet middlegame positions slowly gave away your advantage. Have a plan for each move rather than just reacting."
         }
     }
 
-    /// Lichess puzzle themes that train this leak (the missed-tactics card narrows these down).
+    /// Lichess puzzle themes used as extra practice for the groups that aren't about tactics.
     var puzzleThemes: Set<String> {
         switch self {
-        case .hangingPieces: ["hangingPiece", "trappedPiece"]
-        case .missedTactics: TacticType.other.themes
-        case .notConverting: ["advantage", "crushing", "endgame"]
-        case .middlegameDrift: ["quietMove", "defensiveMove"]
-        case .timeTrouble: ["short", "oneMove"]
-        case .notPunishing: ["hangingPiece", "fork"]
-        case .rushedMoves: ["hangingPiece", "fork", "pin", "trappedPiece", "discoveredAttack"]
+        case .tactics: TacticType.other.themes
+        case .advantage: ["advantage", "crushing", "endgame"]
+        case .timeManagement: ["short", "oneMove"]
+        case .strategy: ["quietMove", "defensiveMove"]
+        }
+    }
+}
+
+/// The specific habits inside the groups.
+enum LeakKind: String, CaseIterable {
+    case hangingPieces, missedTactics, notConverting, middlegameDrift, timeTrouble, notPunishing, rushedMoves
+
+    var group: LeakGroup {
+        switch self {
+        case .hangingPieces, .missedTactics, .notPunishing: .tactics
+        case .notConverting: .advantage
+        case .timeTrouble, .rushedMoves: .timeManagement
+        case .middlegameDrift: .strategy
         }
     }
 }
@@ -124,28 +120,37 @@ struct DrillSpot {
     var loss = 0
     /// Seconds on the player's clock before the move (only for games that have clock times).
     var clockBefore: Double?
+    /// Which specific habit this question comes from.
+    var habit: LeakKind = .missedTactics
+    /// True when the opponent's move just before this one was a big mistake.
+    var afterOpponentMistake = false
+    /// True for a position where the opponent's last move gave nothing away (the answer is "nothing to punish").
+    var isDecoy = false
 }
 
-/// One card in the report.
+/// One card in the report: a group, with the specific habits inside it.
 struct Leak: Identifiable, Hashable {
-    static func == (lhs: Leak, rhs: Leak) -> Bool { lhs.kind == rhs.kind }
-    func hash(into hasher: inout Hasher) { hasher.combine(kind) }
+    static func == (lhs: Leak, rhs: Leak) -> Bool { lhs.group == rhs.group }
+    func hash(into hasher: inout Hasher) { hasher.combine(group) }
 
-    var id: LeakKind { kind }
-    let kind: LeakKind
-    /// Title, adjusted when one game phase dominates (e.g. "...in the middlegame").
-    let title: String
+    var id: LeakGroup { group }
+    let group: LeakGroup
+    var title: String { group.title }
     let gamesAffected: Int
     let gamesChecked: Int
-    /// Total evaluation given away by this leak, in hundredths of a pawn.
+    /// Total evaluation given away by this group, in hundredths of a pawn.
     let totalCost: Int
     let examples: [LeakExample]
-    /// All of the player's own mistakes of this kind (up to 8), used by the drills.
+    /// The player's own mistakes in this group (all habits mixed), used by the drills.
     var spots: [DrillSpot] = []
-    /// An extra line under the title, e.g. "You missed 3 checkmates and 4 forks."
-    var breakdown: String?
-    /// Puzzle themes to drill; empty means use the leak kind's usual themes.
-    var themes: Set<String> = []
+    /// Positions where the opponent's last move gave nothing away (Tactics only).
+    var decoys: [DrillSpot] = []
+    /// The habits and how often each happened, e.g. "hanging pieces (5), missed forks (3)".
+    var habits = ""
+    /// How many of the Tactics events came right after an opponent mistake.
+    var afterOpponentMistake = 0
+    /// How many Tactics events of each kind, used to choose puzzle patterns.
+    var tacticCounts: [TacticType: Int] = [:]
 
     /// Average cost in pawns per game where it happened, e.g. "3.4".
     var pawnsPerGame: String {
@@ -162,6 +167,9 @@ struct LeakReport: Identifiable {
     var playerRating = 1400
     /// Which time control the report covers (for wording like "your last 20 blitz games").
     var speed: TimeControl?
+    /// Positions where you were clearly better after your opponent's mistake and gave it back without a tactic.
+    /// Kept for the future "play on against Stockfish" drill; not shown yet.
+    var advantageSeeds: [DrillSpot] = []
 }
 
 /// Looks through analysed games for the mistakes this player repeats.
@@ -193,12 +201,16 @@ enum LeakDetector {
         var mateIn: Int?
         /// Seconds on the player's clock before the move, when the game has clock times.
         var clockBefore: Double?
+        var habit: LeakKind = .missedTactics
+        var afterOpponentMistake = false
+        var isDecoy = false
     }
 
     static func report(for games: [AnalysedGame]) -> LeakReport {
         var hangs: [Event] = [], tactics: [Event] = [], timeErrors: [Event] = []
         var notPunishing: [Event] = [], rushed: [Event] = []
         var converts: [Event] = [], drifts: [Event] = []
+        var decoyCandidates: [Event] = []
         var gamesWithClocks = 0
 
         /// Stockfish's better move for the player's move at `ply`, in normal notation.
@@ -231,6 +243,10 @@ enum LeakDetector {
                 guard case .mate(let moves) = analysis.evals[ply], isWhite ? moves > 0 : moves < 0 else { return nil }
                 return abs(moves)
             }
+            /// True if the opponent's move just before `ply` gave away 2+ pawns.
+            func afterOpponentBlunder(_ ply: Int) -> Bool {
+                ply >= 2 && !playerMoved(ply - 1) && mine(ply - 1) - mine(ply - 2) >= 200
+            }
 
             let clocks = clockSeconds(in: item.game.pgn)
             let settings = timeSettings(of: item.game)
@@ -239,6 +255,7 @@ enum LeakDetector {
             if hasClocks { gamesWithClocks += 1 }
 
             for ply in 1..<count where playerMoved(ply) {
+                let afterBlunder = afterOpponentBlunder(ply)
                 // Missed checkmate: Stockfish had a forced mate in 1 to 3 and the move played gave it up.
                 // This uses the real mate score, so it's caught even when you were already winning.
                 var missedMate = false
@@ -248,7 +265,7 @@ enum LeakDetector {
                     let better = UCIMove.san(for: first, in: positions[ply - 1]) ?? first
                     tactics.append(Event(gameIndex: gameIndex, ply: ply, cost: max(loss(ply), missedMateCost),
                                          detail: "You missed checkmate in \(moves). Better was \(better)", tactic: .checkmate,
-                                         requiresMate: true, mateIn: moves))
+                                         requiresMate: true, mateIn: moves, habit: .missedTactics, afterOpponentMistake: afterBlunder))
                 }
 
                 guard let judgement = analysis.judgements[ply] else { continue }
@@ -260,16 +277,25 @@ enum LeakDetector {
                     var after = TacticFinder.material(positions[ply], forWhite: isWhite)
                     if ply + 1 < count { after = min(after, TacticFinder.material(positions[ply + 1], forWhite: isWhite)) }
                     if judgement == .blunder && before - after >= 2 {
-                        hangs.append(Event(gameIndex: gameIndex, ply: ply, cost: lost, phase: phase(of: ply, in: positions)))
+                        hangs.append(Event(gameIndex: gameIndex, ply: ply, cost: lost, phase: phase(of: ply, in: positions),
+                                           tactic: .hanging, habit: .hangingPieces, afterOpponentMistake: afterBlunder))
                     } else if lost >= 150, let line = analysis.lines?[safe: ply - 1], let first = line.first,
                               TacticFinder.materialGain(from: positions[ply - 1], line: line, forWhite: isWhite) >= 2 {
                         // Stockfish's best line wins material whatever the first move is, and you didn't play it.
                         let type = TacticFinder.classify(firstMove: first, from: positions[ply - 1])
                         let better = UCIMove.san(for: first, in: positions[ply - 1]) ?? first
- 
-                        let what = type == .fork ? "a fork" : type == .pin ? "a pin" : "a winning tactic"
+                        let what: String
+                        switch type {
+                        case .fork: what = "a fork"
+                        case .pin: what = "a pin"
+                        case .skewer: what = "a skewer"
+                        case .discovery: what = "a discovered attack"
+                        case .sacrifice: what = "a sacrifice"
+                        default: what = "a winning tactic"
+                        }
                         tactics.append(Event(gameIndex: gameIndex, ply: ply, cost: lost,
-                                             detail: "You missed \(what). Better was \(better)", tactic: type))
+                                             detail: "You missed \(what). Better was \(better)", tactic: type,
+                                             habit: .missedTactics, afterOpponentMistake: afterBlunder))
                     }
                 }
 
@@ -280,7 +306,7 @@ enum LeakDetector {
                         let after = clocks[ply - 1]
                         let before = ply >= 3 ? clocks[ply - 3] : settings.base
                         if after < max(8, settings.base * 0.12) {
-                            timeErrors.append(Event(gameIndex: gameIndex, ply: ply, cost: lost, clockBefore: before))
+                            timeErrors.append(Event(gameIndex: gameIndex, ply: ply, cost: lost, clockBefore: before, habit: .timeTrouble))
                         }
                         // Rushed: a mistake played in under 2.5 seconds with more than 30% of the clock left.
                         let spent = before + settings.increment - after
@@ -289,7 +315,7 @@ enum LeakDetector {
                             let better = betterMove(gameIndex, ply).map { " Better was \($0)" } ?? ""
                             rushed.append(Event(gameIndex: gameIndex, ply: ply, cost: lost,
                                                 detail: String(format: "Played in %.1f s with %d%% of your clock left.", spent, left) + better,
-                                                clockBefore: before))
+                                                clockBefore: before, habit: .rushedMoves))
                         }
                     }
                 }
@@ -303,7 +329,24 @@ enum LeakDetector {
                 if gain >= 200, given >= 100, Double(given) > 0.5 * Double(gain) {
                     let better = betterMove(gameIndex, replyPly).map { " Better was \($0)" } ?? ""
                     notPunishing.append(Event(gameIndex: gameIndex, ply: replyPly, cost: given,
-                                              detail: String(format: "Your opponent gave away about %.1f pawns, but your reply lost %.1f.", Double(gain) / 100, Double(given) / 100) + better))
+                                              detail: String(format: "Your opponent gave away about %.1f pawns, but your reply lost %.1f.", Double(gain) / 100, Double(given) / 100) + better,
+                                              tactic: .other, habit: .notPunishing, afterOpponentMistake: true))
+                }
+            }
+
+            // Positions where the opponent's last move gave nothing away, and the player played fine.
+            // These are the "nothing to punish" questions that keep the "What did they just leave?" drill honest.
+            if count > 20 {
+                for opponentPly in 8..<(count - 1) where !playerMoved(opponentPly) {
+                    let replyPly = opponentPly + 1
+                    guard playerMoved(replyPly),
+                          mine(opponentPly) - mine(opponentPly - 1) <= 30,
+                          abs(mine(opponentPly)) <= 300,
+                          loss(replyPly) <= 30,
+                          let line = analysis.lines?[safe: opponentPly], !line.isEmpty,
+                          TacticFinder.materialGain(from: positions[opponentPly], line: line, forWhite: isWhite) < 1
+                    else { continue }
+                    decoyCandidates.append(Event(gameIndex: gameIndex, ply: replyPly, cost: 0, habit: .notPunishing, isDecoy: true))
                 }
             }
 
@@ -321,7 +364,8 @@ enum LeakDetector {
                 }
                 if peak >= 200, let shown, biggest >= 50 {
                     converts.append(Event(gameIndex: gameIndex, ply: shown, cost: min(peak, 500),
-                                          detail: String(format: "You were +%.1f here and this move lost %.1f", Double(mine(shown - 1)) / 100, Double(biggest) / 100)))
+                                          detail: String(format: "You were +%.1f here and this move lost %.1f", Double(mine(shown - 1)) / 100, Double(biggest) / 100),
+                                          habit: .notConverting))
                 }
             }
 
@@ -335,7 +379,8 @@ enum LeakDetector {
                 let net = mine(startPly - 1) - mine(endPly)
                 if !hasMistake, sum >= 100, net >= 150, let worst = myMoves.max(by: { loss($0) < loss($1) }) {
                     drifts.append(Event(gameIndex: gameIndex, ply: worst, cost: net,
-                                        detail: String(format: "Your position slipped by about %.1f pawns over moves 15 to 30", Double(net) / 100)))
+                                        detail: String(format: "Your position slipped by about %.1f pawns over moves 15 to 30", Double(net) / 100),
+                                        habit: .middlegameDrift))
                 }
             }
         }
@@ -357,10 +402,9 @@ enum LeakDetector {
             let value = item.analysis.evals[event.ply - 1].cappedCentipawns
             // The move text without its number, e.g. "27... Qd4" becomes "Qd4".
             let played = item.game.moveNames[event.ply].split(separator: " ").last.map(String.init) ?? ""
-            let isWhiteSide = isWhite
             func mineAt(_ ply: Int) -> Int {
                 let value = item.analysis.evals[ply].cappedCentipawns
-                return isWhiteSide ? value : -value
+                return isWhite ? value : -value
             }
             let lines = item.analysis.lines
             let before = lines?[safe: event.ply - 1] ?? []
@@ -371,7 +415,8 @@ enum LeakDetector {
                              playedLine: Array((lines?[safe: event.ply] ?? []).prefix(3)),
                              tactic: event.tactic, mateIn: event.mateIn,
                              loss: max(0, mineAt(event.ply - 1) - mineAt(event.ply)),
-                             clockBefore: event.clockBefore)
+                             clockBefore: event.clockBefore, habit: event.habit,
+                             afterOpponentMistake: event.afterOpponentMistake, isDecoy: event.isDecoy)
         }
 
         func example(_ event: Event) -> LeakExample {
@@ -381,9 +426,8 @@ enum LeakDetector {
                                moveText: item.game.moveNames[event.ply], detail: detail, cost: event.cost)
         }
 
-        // One move, one card. Order of priority: hanging pieces, then missed tactics with a named type
-        // (checkmate, fork, pin), then "not punishing", then missed tactics labelled "other".
-        // The remaining leaks (time, rushing, drift, converting) describe different things and can overlap.
+        // One move, one habit. Order of priority: hanging pieces, then missed tactics with a named type,
+        // then "not punishing", then missed tactics labelled "other".
         func key(_ event: Event) -> String { "\(event.gameIndex)-\(event.ply)" }
         var claimed = Set(hangs.map(key))
         let namedTactics = tactics.filter { ($0.tactic ?? .other) != .other }
@@ -392,51 +436,73 @@ enum LeakDetector {
         claimed.formUnion(notPunishing.map(key))
         tactics = tactics.filter { ($0.tactic ?? .other) != .other || !claimed.contains(key($0)) }
 
+        // "Not punishing" moves that no tactic explains. If Stockfish's best line wins material, it is a tactic
+        // (kept in Tactics). If you were clearly better (+1.5 or more) and just gave it back, it belongs to
+        // Advantage capitalisation and is saved as a future "play on against Stockfish" start position.
+        var advantageSeeds: [DrillSpot] = []
+        var tacticalNotPunishing: [Event] = []
+        for event in notPunishing {
+            let item = games[event.gameIndex]
+            let isWhite = item.summary.playedWhite
+            let line = item.analysis.lines?[safe: event.ply - 1] ?? []
+            let wins = !line.isEmpty
+                && TacticFinder.materialGain(from: item.game.positions[event.ply - 1], line: line, forWhite: isWhite) >= 1
+            let value = item.analysis.evals[event.ply - 1].cappedCentipawns
+            let lead = isWhite ? value : -value
+            if wins {
+                tacticalNotPunishing.append(event)
+            } else if lead >= 150 {
+                if let seed = spot(event) { advantageSeeds.append(seed) }
+            }
+        }
+
         var leaks: [Leak] = []
-        func add(_ kind: LeakKind, title: String? = nil, events: [Event], checked: Int, breakdown: String? = nil, themes: Set<String> = []) {
+        func add(_ group: LeakGroup, events: [Event], checked: Int, spotLimit: Int = 8) {
             guard !events.isEmpty else { return }
             // Best examples: the costliest, one per game.
             var seen = Set<Int>()
-            let top = events.sorted { $0.cost > $1.cost }.filter { seen.insert($0.gameIndex).inserted }.prefix(3)
-            let spots = events.sorted { $0.cost > $1.cost }.compactMap(spot).prefix(8)
-            leaks.append(Leak(kind: kind, title: title ?? kind.title, gamesAffected: Set(events.map(\.gameIndex)).count,
-                              gamesChecked: checked, totalCost: events.reduce(0) { $0 + $1.cost },
-                              examples: top.map(example), spots: Array(spots), breakdown: breakdown, themes: themes))
+            let sorted = events.sorted { $0.cost > $1.cost }
+            let top = sorted.filter { seen.insert($0.gameIndex).inserted }.prefix(3)
+            var leak = Leak(group: group, gamesAffected: Set(events.map(\.gameIndex)).count, gamesChecked: checked,
+                            totalCost: events.reduce(0) { $0 + $1.cost }, examples: top.map(example),
+                            spots: Array(sorted.compactMap(spot).prefix(spotLimit)))
+
+            // The specific habits inside the group, with counts.
+            switch group {
+            case .tactics:
+                var counts: [TacticType: Int] = [:]
+                for event in events { counts[event.tactic ?? .other, default: 0] += 1 }
+                leak.tacticCounts = counts
+                leak.habits = counts.sorted { $0.value > $1.value }.map { $0.key.habitLabel(count: $0.value) }.joined(separator: ", ")
+                leak.afterOpponentMistake = events.filter(\.afterOpponentMistake).count
+                leak.decoys = Array(decoyCandidates.shuffled().prefix(8).compactMap(spot))
+            case .advantage:
+                leak.habits = "failing to convert a winning position (\(events.count))"
+            case .timeManagement:
+                let low = events.filter { $0.habit == .timeTrouble }.count
+                let fast = events.filter { $0.habit == .rushedMoves }.count
+                leak.habits = [low > 0 ? "mistakes when low on time (\(low))" : nil, fast > 0 ? "rushed moves (\(fast))" : nil]
+                    .compactMap { $0 }.joined(separator: ", ")
+            case .strategy:
+                leak.habits = "slow drift in the middlegame (\(events.count))"
+            }
+            leaks.append(leak)
         }
 
-        // Hanging pieces: name the game phase where most of the damage happens.
-        if !hangs.isEmpty {
-            var byPhase: [Phase: Int] = [:]
-            for event in hangs { byPhase[event.phase ?? .middlegame, default: 0] += event.cost }
-            let worst = byPhase.max { $0.value < $1.value }?.key
-            add(.hangingPieces, title: worst.map { "Leaving pieces hanging, mostly in \($0.rawValue)" }, events: hangs, checked: games.count)
-        }
-
-        // Missed tactics: say what kinds, and drill the matching puzzle themes.
-        if !tactics.isEmpty {
-            var counts: [TacticType: Int] = [:]
-            for event in tactics { counts[event.tactic ?? .other, default: 0] += 1 }
-            let ordered = counts.sorted { $0.value > $1.value }
-            let phrases = ordered.map { $0.key.phrase(count: $0.value) }
-            let list = phrases.count <= 1 ? phrases.joined() : phrases.dropLast().joined(separator: ", ") + " and " + (phrases.last ?? "")
-            let themes = ordered.reduce(into: Set<String>()) { $0.formUnion($1.key.themes) }
-            add(.missedTactics, events: tactics, checked: games.count, breakdown: "You missed \(list).", themes: themes)
-        }
-
-        add(.notConverting, events: converts, checked: games.count)
-        add(.middlegameDrift, events: drifts, checked: games.count)
-        add(.notPunishing, events: notPunishing, checked: games.count)
-
+        // Tactics: hanging pieces and missed tactics, plus the "after your opponent's mistake" moves that are tactics.
+        add(.tactics, events: hangs + tactics + tacticalNotPunishing, checked: games.count, spotLimit: 16)
+        add(.advantage, events: converts, checked: games.count)
+        add(.strategy, events: drifts, checked: games.count)
         // Skipped silently if no game came with clock times.
         if gamesWithClocks > 0 {
-            add(.timeTrouble, events: timeErrors, checked: gamesWithClocks)
-            add(.rushedMoves, events: rushed, checked: gamesWithClocks)
+            add(.timeManagement, events: timeErrors + rushed, checked: gamesWithClocks)
         }
 
-        // Only keep leaks that repeat, then rank by how much they cost in total.
+        // Only keep groups that repeat, then rank by how much they cost in total.
         let recurring = leaks.filter { $0.gamesAffected >= 2 }
         let ranked = recurring.sorted { $0.totalCost > $1.totalCost }
-        return LeakReport(leaks: Array(ranked.prefix(3)), gamesAnalysed: games.count, playerRating: rating(of: games), speed: games.first?.summary.speed)
+        return LeakReport(leaks: Array(ranked.prefix(3)), gamesAnalysed: games.count, playerRating: rating(of: games),
+                          speed: games.first?.summary.speed, advantageSeeds: advantageSeeds)
     }
 
     // MARK: - Helpers

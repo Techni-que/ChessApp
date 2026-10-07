@@ -15,6 +15,10 @@ struct ChessBoardView: View {
     var selected: Square?
     /// Squares to tint (for example the squares of a move being shown).
     var highlights: Set<Square> = []
+    /// Squares you have picked yourself (shown in yellow).
+    var marks: Set<Square> = []
+    /// The squares of the opponent's last move (shown in orange).
+    var lastMove: Set<Square> = []
     /// Arrows to draw on top of the pieces.
     var arrows: [BoardArrow] = []
     /// If set, tapping a square calls this (used by drills).
@@ -34,7 +38,10 @@ struct ChessBoardView: View {
                             ZStack {
                                 Rectangle()
                                     .fill(square.color == .light ? lightSquare : darkSquare)
-                                if square == selected {
+                                if lastMove.contains(square) {
+                                    Rectangle().fill(Color.orange.opacity(0.45))
+                                }
+                                if square == selected || marks.contains(square) {
                                     Rectangle().fill(Color.yellow.opacity(0.55))
                                 } else if highlights.contains(square) {
                                     Rectangle().fill(Color.green.opacity(0.4))

@@ -2,7 +2,8 @@ import ChessKit
 
 /// The kinds of winning tactic the report can name. Anything we can't name safely is "other".
 enum TacticType: Hashable {
-    case checkmate, fork, pin, other
+    /// `sacrifice` is only used to pick puzzles; our own sacrifice detection was too unreliable to show.
+    case checkmate, fork, pin, skewer, sacrifice, discovery, hanging, other
 
     /// Lichess puzzle themes that practise this kind of tactic.
     var themes: Set<String> {
@@ -10,6 +11,10 @@ enum TacticType: Hashable {
         case .checkmate: ["mateIn1", "mateIn2", "mateIn3"]
         case .fork: ["fork"]
         case .pin: ["pin"]
+        case .skewer: ["skewer"]
+        case .sacrifice: ["sacrifice"]
+        case .discovery: ["discoveredAttack"]
+        case .hanging: ["hangingPiece", "trappedPiece"]
         case .other: ["fork", "pin", "skewer", "discoveredAttack", "doubleCheck"]
         }
     }
@@ -20,8 +25,29 @@ enum TacticType: Hashable {
         case .checkmate: count == 1 ? "1 checkmate" : "\(count) checkmates"
         case .fork: count == 1 ? "1 fork" : "\(count) forks"
         case .pin: count == 1 ? "1 pin" : "\(count) pins"
+        case .skewer: count == 1 ? "1 skewer" : "\(count) skewers"
+        case .sacrifice: count == 1 ? "1 sacrifice" : "\(count) sacrifices"
+        case .discovery: count == 1 ? "1 discovered attack" : "\(count) discovered attacks"
+        case .hanging: count == 1 ? "1 hanging piece" : "\(count) hanging pieces"
         case .other: count == 1 ? "1 other tactic" : "\(count) other tactics"
         }
+    }
+
+    /// A label for the card, like "missed forks (3)".
+    func habitLabel(count: Int) -> String {
+        let one = count == 1
+        let name: String
+        switch self {
+        case .checkmate: name = one ? "missed checkmate" : "missed checkmates"
+        case .fork: name = one ? "missed fork" : "missed forks"
+        case .pin: name = one ? "missed pin" : "missed pins"
+        case .skewer: name = one ? "missed skewer" : "missed skewers"
+        case .sacrifice: name = one ? "missed sacrifice" : "missed sacrifices"
+        case .discovery: name = one ? "missed discovered attack" : "missed discovered attacks"
+        case .hanging: name = one ? "hanging piece" : "hanging pieces"
+        case .other: name = one ? "other missed tactic" : "other missed tactics"
+        }
+        return "\(name) (\(count))"
     }
 }
 
@@ -67,21 +93,98 @@ enum TacticFinder {
         return end - start
     }
 
-    /// Names the tactic behind Stockfish's first move: a fork, a pin, or "other".
+    /// Names the tactic behind Stockfish's first move. Order: fork, skewer, pin, discovered attack
+    /// (all judged on the board after the move), then sacrifice (judged from the whole line), else "other".
+    /// Names the tactic behind Stockfish's first move, judged on the board after the move:
+    /// fork, skewer, pin (absolute pins only), discovered attack, else "other".
+    /// Sacrifices are not labelled: in tests against Lichess's own puzzle tags, our sacrifice rule agreed only about
+    /// a third of the time, which is too unreliable to show. Better to say "other" than to guess.
     static func classify(firstMove uci: String, from position: Position) -> TacticType {
         var board = Board(position: position)
         guard UCIMove.play(uci, on: &board) != nil else { return .other }
         let end = Square(String(uci.dropFirst(2).prefix(2)))
         guard let moved = board.position.piece(at: end) else { return .other }
         if isFork(moved, in: board.position) { return .fork }
+        if isSkewer(moved, in: board.position) { return .skewer }
         if isPin(moved, in: board.position) { return .pin }
+        if isDiscovery(before: position, after: board.position, moved: moved) { return .discovery }
         return .other
+    }
+
+    /// A skewer: a bishop, rook or queen attacks an enemy piece that must move (the king, or something more
+    /// valuable than what stands behind it), and a piece worth at least a knight is directly behind it.
+    static func isSkewer(_ slider: Piece, in position: Position) -> Bool {
+        let directions: [(Int, Int)]
+        switch slider.kind {
+        case .bishop: directions = diagonals
+        case .rook: directions = straights
+        case .queen: directions = diagonals + straights
+        default: return false
+        }
+        let enemy = slider.color.opposite
+        for (df, dr) in directions {
+            var front: Piece?
+            var file = slider.square.file.number + df
+            var rank = slider.square.rank.value + dr
+            while let target = square(file, rank) {
+                if let piece = position.piece(at: target) {
+                    guard piece.color == enemy else { break }
+                    if let front {
+                        if piece.kind != .king, piece.kind != .pawn,
+                           front.kind == .king || pieceValue(front.kind) > pieceValue(piece.kind) {
+                            return true
+                        }
+                        break
+                    }
+                    front = piece
+                }
+                file += df
+                rank += dr
+            }
+        }
+        return false
+    }
+
+    /// A discovered attack: moving a piece uncovers a bishop, rook or queen of the same side onto an enemy
+    /// king, queen or rook that it wasn't attacking before.
+    static func isDiscovery(before: Position, after: Position, moved: Piece) -> Bool {
+        for slider in after.pieces where slider.color == moved.color && slider.square != moved.square {
+            guard [.bishop, .rook, .queen].contains(slider.kind),
+                  let earlier = before.piece(at: slider.square), earlier.kind == slider.kind, earlier.color == slider.color
+            else { continue }
+            let attackedBefore = Set(attackedSquares(by: earlier, in: before))
+            for target in attackedSquares(by: slider, in: after) where !attackedBefore.contains(target) {
+                if let victim = after.piece(at: target), victim.color != moved.color,
+                   victim.kind == .king || victim.kind == .queen || victim.kind == .rook {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Pieces (not pawns or kings) of one colour that the opponent could simply win: attacked and either
+    /// undefended or attacked by something worth less. Pins are ignored; this is pure geometry.
+    static func enPrise(_ position: Position, color: Piece.Color) -> [Square] {
+        var result: [Square] = []
+        for piece in position.pieces where piece.color == color && piece.kind != .king && piece.kind != .pawn {
+            let attackers = position.pieces.filter { $0.color != color && attackedSquares(by: $0, in: position).contains(piece.square) }
+            guard !attackers.isEmpty else { continue }
+            let defended = position.pieces.contains {
+                $0.color == color && $0.square != piece.square && attackedSquares(by: $0, in: position).contains(piece.square)
+            }
+            if !defended || attackers.contains(where: { $0.kind != .king && pieceValue($0.kind) < pieceValue(piece.kind) }) {
+                result.append(piece.square)
+            }
+        }
+        return result
     }
 
     // MARK: - Fork and pin
 
-    /// A fork: one piece attacks two or more enemy pieces worth more than a pawn (a king counts),
-    /// and no enemy piece of equal or lower value can simply capture it.
+    /// A fork: one piece attacks two or more enemy pieces worth more than a pawn (a king counts), it can't simply
+    /// be captured for free or for gain, and at least one of the targets is worth winning (the king, something
+    /// worth more than the forking piece, or something nobody defends).
     static func isFork(_ forker: Piece, in position: Position) -> Bool {
         guard forker.kind != .king else { return false }
         let enemy = forker.color.opposite
@@ -91,16 +194,21 @@ enum TacticFinder {
         guard targets.count >= 2 else { return false }
 
         let myValue = pieceValue(forker.kind)
-        for piece in position.pieces where piece.color == enemy && piece.kind != .king {
-            if pieceValue(piece.kind) <= myValue, attackedSquares(by: piece, in: position).contains(forker.square) {
-                return false
-            }
+        let defended = position.pieces.contains {
+            $0.color == forker.color && $0.square != forker.square && attackedSquares(by: $0, in: position).contains(forker.square)
         }
-        return true
+        for piece in position.pieces where piece.color == enemy && attackedSquares(by: piece, in: position).contains(forker.square) {
+            // A king can only take an undefended piece; anything else captures if that is free or wins material.
+            if piece.kind == .king ? !defended : (!defended || pieceValue(piece.kind) < myValue) { return false }
+        }
+        return targets.contains { target in
+            target.kind == .king || pieceValue(target.kind) > myValue
+                || !position.pieces.contains { $0.color == enemy && $0.square != target.square && attackedSquares(by: $0, in: position).contains(target.square) }
+        }
     }
 
-    /// A pin: a bishop, rook or queen attacks an enemy piece that has a more valuable
-    /// enemy piece (or the king) directly behind it on the same line.
+    /// A pin: a bishop, rook or queen attacks an enemy piece that has the enemy king directly behind it
+    /// on the same line, so the piece can't move.
     static func isPin(_ pinner: Piece, in position: Position) -> Bool {
         let directions: [(Int, Int)]
         switch pinner.kind {
@@ -118,8 +226,9 @@ enum TacticFinder {
             while let square = square(file, rank) {
                 if let piece = position.piece(at: square) {
                     if let front {
-                        if piece.color == enemy, front.kind != .king,
-                           piece.kind == .king || pieceValue(piece.kind) > pieceValue(front.kind) {
+                        // Only absolute pins (the piece is pinned to the king). In tests, these agreed with Lichess's
+                        // own pin tags 70% of the time, against about 50% when pins to other pieces were included.
+                        if piece.color == enemy, front.kind != .king, piece.kind == .king {
                             return true
                         }
                         break

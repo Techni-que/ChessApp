@@ -67,6 +67,16 @@ final class DrillSessionModel {
     private(set) var exploring = false
     private(set) var exploreEval: Evaluation?
 
+    // "What's loose?" and "What did they just leave?"
+    /// The squares you have tapped so far in a "What's loose?" question.
+    private(set) var loosePicks: Set<Square> = []
+    /// The squares of the opponent's last move, shown in "What did they just leave?" questions.
+    private(set) var lastMove: Set<Square> = []
+    private var looseAnswer: [Square] = []
+    /// Where the best line starts: the position before the player's move. For "What's loose?" this differs
+    /// from `questionStart`, which is the position after the move.
+    private var lineStart = Position.standard
+
     /// The position the question starts from (for puzzles, after the opponent's setup move).
     private var questionStart = Position.standard
     /// Moves still to play in the current puzzle (yours, then theirs, and so on).
@@ -91,19 +101,107 @@ final class DrillSessionModel {
     /// Builds a session for one leak: about half the player's own mistakes, the rest puzzles.
     init(leak: Leak, playerRating: Int) {
         self.leak = leak
-        let own = Self.pickSpots(leak.spots, count: PuzzleLibrary.isAvailable ? 5 : 10)
-        let puzzles = PuzzleLibrary.pick(themes: leak.themes.isEmpty ? leak.kind.puzzleThemes : leak.themes, rating: playerRating, count: 10 - own.count)
+        let built = leak.group == .tactics
+            ? Self.tacticsQuestions(leak: leak, rating: playerRating)
+            : Self.mixedQuestions(leak: leak, rating: playerRating)
+        questions = built
+        outcomes = Array(repeating: nil, count: built.count)
+        loadQuestion(at: 0)
+    }
+
+    /// The default session: about half the player's own mistakes, the rest puzzles, alternating.
+    private static func mixedQuestions(leak: Leak, rating: Int) -> [DrillQuestion] {
+        let own = pickSpots(leak.spots, count: PuzzleLibrary.isAvailable ? 5 : 10)
+        let themes = leak.group.puzzleThemes
+        let puzzles = PuzzleLibrary.pick(themes: themes, rating: rating, count: 10 - own.count)
         var mixed: [DrillQuestion] = []
-        var ownQuestions = own.map { DrillQuestion(leak: leak.kind, source: .ownMistake($0)) }
-        var puzzleQuestions = puzzles.map { DrillQuestion(leak: leak.kind, source: .puzzle($0)) }
-        // Alternate the two kinds so the session doesn't feel repetitive.
+        var ownQuestions = own.map { DrillQuestion(group: leak.group, source: .ownMistake($0)) }
+        var puzzleQuestions = puzzles.map { DrillQuestion(group: leak.group, source: .puzzle($0), wantedThemes: themes) }
         while !ownQuestions.isEmpty || !puzzleQuestions.isEmpty {
             if !ownQuestions.isEmpty { mixed.append(ownQuestions.removeFirst()) }
             if !puzzleQuestions.isEmpty { mixed.append(puzzleQuestions.removeFirst()) }
         }
-        questions = mixed
-        outcomes = Array(repeating: nil, count: mixed.count)
-        loadQuestion(at: 0)
+        return mixed
+    }
+
+    /// A Tactics session: up to 2 "What's loose?", up to 2 "What did they just leave?" (one of them may be a
+    /// "nothing here" position), up to 3 find-the-move questions from your own games, then puzzles of the
+    /// patterns you miss most, with the same pattern kept together.
+    private static func tacticsQuestions(leak: Leak, rating: Int) -> [DrillQuestion] {
+        func key(_ spot: DrillSpot) -> String { "\(spot.game.pgn)#\(spot.ply)" }
+        var used = Set<String>()
+        var questions: [DrillQuestion] = []
+
+        // 1. What's loose? (only positions where we can name the loose pieces and they match what Stockfish takes)
+        let looseSpots = leak.spots.filter { $0.habit == .hangingPieces && looseSquares(for: $0) != nil }
+        for spot in pickSpots(looseSpots, count: 2) {
+            questions.append(DrillQuestion(group: .tactics, source: .ownMistake(spot), mode: .looseCheck))
+            used.insert(key(spot))
+        }
+
+        // 2. What did they just leave?
+        let leftSpots = leak.spots.filter { $0.afterOpponentMistake && !used.contains(key($0)) }
+        let leftPicks = pickSpots(leftSpots, count: 2)
+        for spot in leftPicks {
+            questions.append(DrillQuestion(group: .tactics, source: .ownMistake(spot), mode: .leftCheck))
+            used.insert(key(spot))
+        }
+        // Sometimes the honest answer is "nothing": mix in one position where their move gave nothing away.
+        if !leftPicks.isEmpty, let decoy = leak.decoys.filter({ !used.contains(key($0)) }).randomElement() {
+            questions.insert(DrillQuestion(group: .tactics, source: .ownMistake(decoy), mode: .leftCheck), at: max(0, questions.count - 1))
+            used.insert(key(decoy))
+        }
+
+        // 3. Find the better move in your own missed tactics.
+        let restSpots = leak.spots.filter { !used.contains(key($0)) && !$0.isDecoy }
+        let findCount = max(0, min(3, 10 - questions.count - 3))
+        for spot in pickSpots(restSpots, count: findCount) {
+            questions.append(DrillQuestion(group: .tactics, source: .ownMistake(spot)))
+        }
+
+        // 4. Puzzles, same pattern together. Patterns come from what you miss most.
+        let remaining = max(0, 10 - questions.count)
+        var patterns = leak.tacticCounts.sorted { $0.value > $1.value }.map(\.key).filter { $0 != .other }
+        if patterns.isEmpty { patterns = [.other] }
+        patterns = Array(patterns.prefix(2))
+        var usedPuzzles = Set<String>()
+        var blocks: [DrillQuestion] = []
+        for (index, pattern) in patterns.enumerated() {
+            let share = patterns.count == 1 ? remaining : (index == 0 ? (remaining + 1) / 2 : remaining / 2)
+            for puzzle in PuzzleLibrary.pick(themes: pattern.themes, rating: rating, count: share, excluding: usedPuzzles) {
+                usedPuzzles.insert(puzzle.id)
+                blocks.append(DrillQuestion(group: .tactics, source: .puzzle(puzzle), wantedThemes: pattern.themes))
+            }
+        }
+        // If a pattern didn't have enough puzzles, top up with general tactics puzzles.
+        if blocks.count < remaining {
+            let themes = TacticType.other.themes
+            for puzzle in PuzzleLibrary.pick(themes: themes, rating: rating, count: remaining - blocks.count, excluding: usedPuzzles) {
+                blocks.append(DrillQuestion(group: .tactics, source: .puzzle(puzzle), wantedThemes: themes))
+            }
+        }
+        // If we still have fewer than 10 questions (few spots), add more of your own.
+        questions += blocks
+        if questions.count < 10 {
+            let more = leak.spots.filter { !used.contains(key($0)) && !$0.isDecoy }
+            for spot in pickSpots(more, count: 10 - questions.count) where !questions.contains(where: { q in
+                if case .ownMistake(let s) = q.source { return key(s) == key(spot) } else { return false }
+            }) {
+                questions.append(DrillQuestion(group: .tactics, source: .ownMistake(spot)))
+            }
+        }
+        return questions
+    }
+
+    /// The player's pieces that the opponent can simply win after the move the player made, if we can name them
+    /// and they include the piece Stockfish's reply actually takes. nil means "don't ask this question".
+    private static func looseSquares(for spot: DrillSpot) -> [Square]? {
+        guard spot.ply < spot.game.positions.count else { return nil }
+        let after = spot.game.positions[spot.ply]
+        let loose = TacticFinder.enPrise(after, color: spot.playerIsWhite ? .white : .black)
+        guard !loose.isEmpty, let reply = spot.playedLine.first, reply.count >= 4 else { return nil }
+        let target = Square(String(reply.dropFirst(2).prefix(2)))
+        return loose.contains(target) ? loose : nil
     }
 
     // MARK: - Question text
@@ -114,11 +212,19 @@ final class DrillSessionModel {
         let side = questionStart.sideToMove == .white ? "White" : "Black"
         switch question.source {
         case .ownMistake(let spot):
-            var text = "From your game (\(spot.gameLabel)). You played \(spot.playedMove) here"
-            if let clock = spot.clockBefore, leak.kind == .timeTrouble || leak.kind == .rushedMoves {
-                text += ", with \(Self.clockText(clock)) left on your clock"
+            switch question.mode {
+            case .looseCheck:
+                return "From your game (\(spot.gameLabel)). You played \(spot.playedMove), and this is the position now. Your opponent is to move. Tap every one of your pieces they can win, then press Check."
+            case .leftCheck:
+                let theirs = Self.lastMoveText(for: spot)
+                return "From your game (\(spot.gameLabel)). Your opponent just played \(theirs) (marked on the board). Did it leave something? Find the move that punishes it, or tap \"Nothing to punish\"."
+            case .findMove:
+                var text = "From your game (\(spot.gameLabel)). You played \(spot.playedMove) here"
+                if let clock = spot.clockBefore, spot.habit == .timeTrouble || spot.habit == .rushedMoves {
+                    text += ", with \(Self.clockText(clock)) left on your clock"
+                }
+                return text + ". Find a better move."
             }
-            return text + ". Find a better move."
         case .puzzle(let puzzle):
             return "Puzzle, rated \(puzzle.rating). Find the best move for \(side)."
         }
@@ -151,8 +257,17 @@ final class DrillSessionModel {
 
     var sourceName: String {
         guard let question = current else { return "" }
-        if case .ownMistake = question.source { return "Your own mistake" }
-        return "Practice puzzle"
+        return name(of: question)
+    }
+
+    /// The kind of question, for the header and the results list.
+    func name(of question: DrillQuestion) -> String {
+        switch (question.source, question.mode) {
+        case (.ownMistake, .looseCheck): "What's loose?"
+        case (.ownMistake, .leftCheck): "What did they just leave?"
+        case (.ownMistake, .findMove): "Your own mistake"
+        case (.puzzle, _): "Practice puzzle"
+        }
     }
 
     /// A short description of a question, for the results list.
@@ -166,6 +281,23 @@ final class DrillSessionModel {
     func isOwnMistake(_ question: DrillQuestion) -> Bool {
         if case .ownMistake = question.source { return true }
         return false
+    }
+
+    /// What kind of question is on screen.
+    var mode: DrillQuestion.Mode { current?.mode ?? .findMove }
+    /// True while a "What's loose?" question is waiting for your picks.
+    var isLooseQuestion: Bool { mode == .looseCheck }
+
+    /// The opponent's last move in normal notation, like "Nf3".
+    private static func lastMoveText(for spot: DrillSpot) -> String {
+        guard spot.ply >= 1, spot.ply - 1 < spot.game.moveNames.count else { return "a move" }
+        return spot.game.moveNames[spot.ply - 1].split(separator: " ").last.map(String.init) ?? "a move"
+    }
+
+    /// The squares the opponent's last move went from and to, if we can work them out.
+    private static func lastMoveSquares(for spot: DrillSpot) -> Set<Square> {
+        guard spot.ply >= 2, let uci = UCIMove.uci(forSAN: lastMoveText(for: spot), in: spot.game.positions[spot.ply - 2]) else { return [] }
+        return [Square(String(uci.prefix(2))), Square(String(uci.dropFirst(2).prefix(2)))]
     }
 
     /// Whether "Why your move fails" has something to show: a wrong move you tried,
@@ -198,18 +330,33 @@ final class DrillSessionModel {
         replayMoves = []
         exploring = false
         exploreEval = nil
+        loosePicks = []
+        lastMove = []
+        looseAnswer = []
         guard let question = current else { return }
 
         switch question.source {
         case .ownMistake(let spot):
-            board = Board(position: spot.game.positions[spot.ply - 1])
+            lineStart = spot.game.positions[spot.ply - 1]
             flipped = !spot.playerIsWhite
+            switch question.mode {
+            case .looseCheck:
+                // Show the position AFTER your move, and ask which pieces are now loose.
+                board = Board(position: spot.game.positions[spot.ply])
+                looseAnswer = Self.looseSquares(for: spot) ?? []
+            case .leftCheck:
+                board = Board(position: lineStart)
+                lastMove = Self.lastMoveSquares(for: spot)
+            case .findMove:
+                board = Board(position: lineStart)
+            }
         case .puzzle(let puzzle):
             board = Board(position: Position(fen: puzzle.fen) ?? .standard)
             // The first move belongs to the opponent and sets up the position.
             if let first = puzzle.moves.first { _ = UCIMove.play(first, on: &board) }
             puzzleMoves = Array(puzzle.moves.dropFirst())
             flipped = board.position.sideToMove == .black
+            lineStart = board.position
         }
         questionStart = board.position
 
@@ -219,10 +366,13 @@ final class DrillSessionModel {
             puzzleMoves = []
             message = "\(outcome.label)."
             explanation = explanationSentence(for: question)
-            if let key = bestMoves(for: question).first { arrows = [arrow(key)] }
+            restState()
         } else {
             phase = .asking
-            if leak.kind == .rushedMoves { startPause(seconds: Self.rushPauseSeconds) }
+            // Rushed moves get a forced pause before you may touch the board.
+            if case .ownMistake(let spot) = question.source, spot.habit == .rushedMoves {
+                startPause(seconds: Self.rushPauseSeconds)
+            }
         }
     }
 
@@ -274,7 +424,44 @@ final class DrillSessionModel {
             return
         }
         guard phase == .asking, pauseLeft == 0 else { return }
+        if mode == .looseCheck {
+            // Pick (or un-pick) one of your own pieces.
+            guard let piece = board.position.piece(at: square),
+                  case .ownMistake(let spot) = current?.source, piece.color == (spot.playerIsWhite ? .white : .black) else {
+                message = "Tap one of your own pieces."
+                return
+            }
+            if loosePicks.contains(square) { loosePicks.remove(square) } else { loosePicks.insert(square) }
+            return
+        }
         selectOrMove(square, onMove: { attempt(from: $0.from, to: $0.to) })
+    }
+
+    /// "Check" in a "What's loose?" question: compare your picks with the pieces the opponent can win.
+    func checkLoose() {
+        guard mode == .looseCheck, phase == .asking else { return }
+        guard !loosePicks.isEmpty else {
+            message = "Tap the pieces you think are loose first."
+            return
+        }
+        let answer = Set(looseAnswer)
+        if loosePicks == answer {
+            solved("Yes, those are the loose pieces.")
+        } else if !loosePicks.isSubset(of: answer) {
+            wrong(nil, "Not quite, try again. One of those pieces is safe.")
+        } else {
+            wrong(nil, "Not quite, try again. You missed a loose piece.")
+        }
+    }
+
+    /// "Nothing to punish" in a "What did they just leave?" question.
+    func claimNothing() {
+        guard mode == .leftCheck, phase == .asking, case .ownMistake(let spot)? = current?.source else { return }
+        if spot.isDecoy {
+            solved("Right: their last move didn't give anything away.")
+        } else {
+            wrong(nil, "Not quite, try again. Look again: their last move did leave something.")
+        }
     }
 
     /// Tap logic shared by answering and exploring: pick a piece, then a square for it.
@@ -320,6 +507,10 @@ final class DrillSessionModel {
 
         switch question.source {
         case .ownMistake(let spot):
+            if question.mode == .leftCheck && spot.isDecoy {
+                wrong(tried, "Not quite, try again. Their last move didn't give anything away. Is there really something to win?")
+                return
+            }
             let played = Self.plain(move.san)
             if played == Self.plain(spot.betterMove) {
                 board = trial
@@ -401,6 +592,17 @@ final class DrillSessionModel {
     func hint() {
         guard canHint, let question = current else { return }
         hintUsed = true
+        if question.mode == .looseCheck {
+            if let square = looseAnswer.first(where: { !loosePicks.contains($0) }) {
+                highlights = [square]
+                message = "Hint: the highlighted piece is one of the loose ones."
+            }
+            return
+        }
+        if case .ownMistake(let spot) = question.source, spot.isDecoy {
+            message = "Hint: check each of their pieces. Is anything loose, or attacked and not defended?"
+            return
+        }
         let key: String? = switch question.source {
         case .puzzle: puzzleMoves.first
         case .ownMistake: bestMoves(for: question).first
@@ -421,11 +623,12 @@ final class DrillSessionModel {
         phase = .solved
         message = (outcome == .pass ? "Correct, first try! " : outcome == .hinted ? "Solved, with a hint. " : "Solved on the second try. ") + text
         finish(outcome)
+        if mode == .looseCheck { restState() }
     }
 
-    private func wrong(_ tried: WrongMove, _ text: String) {
+    private func wrong(_ tried: WrongMove?, _ text: String) {
         wrongTries += 1
-        wrongMoves.append(tried)
+        if let tried { wrongMoves.append(tried) }
         selected = nil
         if wrongTries >= 2 {
             reveal()
@@ -441,20 +644,31 @@ final class DrillSessionModel {
         phase = .revealed
         selected = nil
         highlights = []
+        if question.mode == .looseCheck {
+            // Show the loose pieces and what the opponent takes; the safe move comes in the explanation.
+            message = "Not this time. These were the loose pieces."
+            finish(.revealed)
+            restState()
+            return
+        }
         let line = bestMoves(for: question)
-        let san = line.first.flatMap { UCIMove.san(for: $0, in: questionStart) }
-        message = san.map { "Not this time. The best move was \($0)." } ?? "Not this time."
+        let san = line.first.flatMap { UCIMove.san(for: $0, in: lineStart) }
+        if case .ownMistake(let spot) = question.source, spot.isDecoy {
+            message = "Not this time. Their last move didn't leave anything to win."
+        } else {
+            message = san.map { "Not this time. The best move was \($0)." } ?? "Not this time."
+        }
         finish(.revealed)
         // Play the whole solution out from the start, then return to the start with an arrow on the best move.
-        if line.isEmpty { restState() } else { startReplay(from: questionStart, moves: line, title: "The solution") }
+        if line.isEmpty { restState() } else { startReplay(from: lineStart, moves: line, title: "The solution") }
     }
 
     /// Saves the result and prepares the one-line explanation.
     private func finish(_ outcome: DrillOutcome) {
         guard let question = current else { return }
         outcomes[index] = outcome
-        DrillStats.record(leak.kind, right: outcome.solved)
-        var record = DrillRecord(key: question.stableKey, leak: leak.kind.rawValue, outcome: outcome, date: Date())
+        DrillStats.record(leak.group.rawValue, right: outcome.solved)
+        var record = DrillRecord(key: question.stableKey, leak: leak.group.rawValue, outcome: outcome, date: Date())
         switch question.source {
         case .ownMistake(let spot):
             record.gamePGN = spot.game.pgn
@@ -468,8 +682,21 @@ final class DrillSessionModel {
 
     private func explanationSentence(for question: DrillQuestion) -> String? {
         switch question.source {
-        case .ownMistake(let spot): DrillExplainer.sentence(for: spot, leak: leak.kind)
-        case .puzzle(let puzzle): DrillExplainer.sentence(for: puzzle, wanted: leak.themes.isEmpty ? leak.kind.puzzleThemes : leak.themes)
+        case .ownMistake(let spot):
+            switch question.mode {
+            case .looseCheck:
+                let base = DrillExplainer.sentence(for: spot, leak: .hangingPieces)
+                return base.contains("safer") ? base : base + " A safer move was \(spot.betterMove)."
+            case .leftCheck:
+                if spot.isDecoy {
+                    return "Their \(Self.lastMoveText(for: spot)) didn't give anything away. Stockfish's move here is \(spot.betterMove), but nothing was winning."
+                }
+                return DrillExplainer.sentence(for: spot, leak: .notPunishing)
+            case .findMove:
+                return DrillExplainer.sentence(for: spot, leak: spot.habit)
+            }
+        case .puzzle(let puzzle):
+            return DrillExplainer.sentence(for: puzzle, wanted: question.wantedThemes.isEmpty ? leak.group.puzzleThemes : question.wantedThemes)
         }
     }
 
@@ -477,6 +704,12 @@ final class DrillSessionModel {
     private func restState() {
         board = Board(position: questionStart)
         selected = nil
+        // "What's loose?": show the loose pieces and the capture the opponent has.
+        if let question = current, question.mode == .looseCheck, case .ownMistake(let spot) = question.source {
+            highlights = Set(looseAnswer)
+            if let reply = spot.playedLine.first, reply.count >= 4 { arrows = [arrow(reply)] } else { arrows = [] }
+            return
+        }
         highlights = []
         if let question = current, let key = bestMoves(for: question).first { arrows = [arrow(key)] } else { arrows = [] }
     }
@@ -490,7 +723,7 @@ final class DrillSessionModel {
             return Array(puzzle.moves.dropFirst())
         case .ownMistake(let spot):
             if !spot.bestLine.isEmpty { return spot.bestLine }
-            if let uci = spot.betterUCI ?? UCIMove.uci(forSAN: spot.betterMove, in: questionStart) { return [uci] }
+            if let uci = spot.betterUCI ?? UCIMove.uci(forSAN: spot.betterMove, in: lineStart) { return [uci] }
             return []
         }
     }
@@ -504,7 +737,7 @@ final class DrillSessionModel {
         guard let question = current else { return }
         let line = Array(bestMoves(for: question).prefix(3))
         guard !line.isEmpty else { return }
-        startReplay(from: questionStart, moves: line, title: "Why the best move works")
+        startReplay(from: lineStart, moves: line, title: "Why the best move works")
     }
 
     /// "Why your move fails": shows your move, then the engine's answer to it (at most 3 more moves).
@@ -516,7 +749,7 @@ final class DrillSessionModel {
         replayTitle = "Why your move fails"
         replayMoves = []
         arrows = []
-        board = Board(position: questionStart)
+        board = Board(position: lineStart)
 
         let shown = index
         replayTask = Task {
@@ -528,7 +761,7 @@ final class DrillSessionModel {
                 reply = Array((result?.line ?? []).prefix(3))
             } else if case .ownMistake(let spot) = question.source {
                 // Nothing wrong was tried, so show the move that was played in the game.
-                first = UCIMove.uci(forSAN: spot.playedMove, in: questionStart)
+                first = UCIMove.uci(forSAN: spot.playedMove, in: lineStart)
                 reply = Array(spot.playedLine.prefix(3))
             }
             guard !Task.isCancelled, index == shown, let first else {

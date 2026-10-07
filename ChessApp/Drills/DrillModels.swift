@@ -30,10 +30,10 @@ enum PuzzleLibrary {
     static var isAvailable: Bool { !all.isEmpty }
 
     /// Puzzles with any of these themes, near the player's rating (within about 200 points), in random order.
-    static func pick(themes wanted: Set<String>, rating: Int, count: Int) -> [Puzzle] {
+    static func pick(themes wanted: Set<String>, rating: Int, count: Int, excluding: Set<String> = []) -> [Puzzle] {
         guard count > 0 else { return [] }
         let target = min(max(rating, 1000), 2000)
-        let close = all.filter { abs($0.rating - target) <= 200 && !$0.themes.isDisjoint(with: wanted) }
+        let close = all.filter { abs($0.rating - target) <= 200 && !excluding.contains($0.id) && !$0.themes.isDisjoint(with: wanted) }
         return Array(close.shuffled().prefix(count))
     }
 }
@@ -62,14 +62,27 @@ struct DrillQuestion: Identifiable {
         case puzzle(Puzzle)
     }
 
+    /// What the player is asked to do.
+    enum Mode: String {
+        /// Find a better move (the original drill).
+        case findMove
+        /// "What's loose?": tap the pieces the opponent can win after your move.
+        case looseCheck
+        /// "What did they just leave?": punish the opponent's last move, or say there is nothing to punish.
+        case leftCheck
+    }
+
     let id = UUID()
-    let leak: LeakKind
+    let group: LeakGroup
     let source: Source
+    var mode: Mode = .findMove
+    /// For puzzles: the themes that put this puzzle in the drill (used to word the explanation).
+    var wantedThemes: Set<String> = []
 
     /// A key that stays the same between launches, so the same position can be recognised later.
     var stableKey: String {
         switch source {
-        case .ownMistake(let spot): "own-\(Self.fingerprint(spot.game.pgn))-\(spot.ply)"
+        case .ownMistake(let spot): "own-\(Self.fingerprint(spot.game.pgn))-\(spot.ply)-\(mode.rawValue)"
         case .puzzle(let puzzle): "puzzle-\(puzzle.id)"
         }
     }
@@ -127,21 +140,21 @@ enum DrillStats {
         var wrong = 0
     }
 
-    private static let key = "drillStats"
+    private static let storeKey = "drillStats"
 
     static func all() -> [String: Score] {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let data = UserDefaults.standard.data(forKey: storeKey),
               let scores = try? JSONDecoder().decode([String: Score].self, from: data) else { return [:] }
         return scores
     }
 
-    static func score(for leak: LeakKind) -> Score { all()[leak.rawValue] ?? Score() }
+    static func score(for key: String) -> Score { all()[key] ?? Score() }
 
-    static func record(_ leak: LeakKind, right: Bool) {
+    static func record(_ key: String, right: Bool) {
         var scores = all()
-        var score = scores[leak.rawValue] ?? Score()
+        var score = scores[key] ?? Score()
         if right { score.right += 1 } else { score.wrong += 1 }
-        scores[leak.rawValue] = score
-        if let data = try? JSONEncoder().encode(scores) { UserDefaults.standard.set(data, forKey: key) }
+        scores[key] = score
+        if let data = try? JSONEncoder().encode(scores) { UserDefaults.standard.set(data, forKey: storeKey) }
     }
 }

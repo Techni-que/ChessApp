@@ -58,7 +58,7 @@ private struct LeakCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: leak.kind.symbol)
+                Image(systemName: leak.group.symbol)
                     .font(.title3)
                     .foregroundStyle(.orange)
                     .frame(width: 28)
@@ -68,14 +68,19 @@ private struct LeakCard: View {
                 }
             }
 
-            if let breakdown = leak.breakdown {
-                Text(breakdown).font(.subheadline.weight(.semibold))
+            if !leak.habits.isEmpty {
+                Text(leak.habits.prefix(1).uppercased() + leak.habits.dropFirst())
+                    .font(.subheadline.weight(.semibold))
+            }
+            if leak.afterOpponentMistake > 0 {
+                Text("\(leak.afterOpponentMistake) of these came right after your opponent made a mistake.")
+                    .font(.subheadline)
             }
 
             Text("Happens in \(leak.gamesAffected) of \(leak.gamesChecked) games · costs about \(leak.pawnsPerGame) pawns per game")
                 .font(.subheadline.weight(.semibold))
 
-            Text(leak.kind.explanation)
+            Text(leak.group.explanation)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -100,7 +105,7 @@ private struct LeakCard: View {
                 .buttonStyle(.plain)
             }
 
-            let score = DrillStats.score(for: leak.kind)
+            let score = DrillStats.score(for: leak.group.rawValue)
             Button(action: drill) {
                 Label("Drill this leak", systemImage: "scope")
                     .frame(maxWidth: .infinity)

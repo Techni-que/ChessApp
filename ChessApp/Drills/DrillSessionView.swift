@@ -24,7 +24,7 @@ struct DrillSessionView: View {
                 questionView
             }
         }
-        .navigationTitle(leak.kind.title)
+        .navigationTitle(leak.kind.shortTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -108,9 +108,11 @@ struct DrillSessionView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     if !model.replayMoves.isEmpty {
-                        Text(model.replayMoves.joined(separator: "  "))
+                        movesText(model.replayMoves)
                             .font(.subheadline.monospaced())
-                            .foregroundStyle(.secondary)
+                        Text("Bold: your moves · Grey: opponent's replies")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
             }
@@ -162,6 +164,16 @@ struct DrillSessionView: View {
                 }
             }
         }
+    }
+
+    /// Your moves in bold, the opponent's replies in grey.
+    private func movesText(_ moves: [DrillSessionModel.ReplayMove]) -> Text {
+        var result = Text("")
+        for (index, move) in moves.enumerated() {
+            if index > 0 { result = result + Text("  ") }
+            result = result + (move.mine ? Text(move.san).bold() : Text(move.san).foregroundStyle(.secondary))
+        }
+        return result
     }
 
     private var feedbackColor: Color {

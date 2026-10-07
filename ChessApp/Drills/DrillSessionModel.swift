@@ -21,6 +21,13 @@ final class DrillSessionModel {
         case reviewing
     }
 
+    /// One move shown in a replay, marked as the player's or the opponent's.
+    struct ReplayMove: Identifiable {
+        let id = UUID()
+        let san: String
+        let mine: Bool
+    }
+
     /// A move the player tried that wasn't right.
     private struct WrongMove {
         let uci: String
@@ -53,7 +60,7 @@ final class DrillSessionModel {
 
     // Replays ("Why your move fails" / "Why the best move works").
     private(set) var replayTitle: String?
-    private(set) var replayMoves: [String] = []
+    private(set) var replayMoves: [ReplayMove] = []
     private(set) var isReplaying = false
 
     // Explore mode.
@@ -84,7 +91,7 @@ final class DrillSessionModel {
     /// Builds a session for one leak: about half the player's own mistakes, the rest puzzles.
     init(leak: Leak, playerRating: Int) {
         self.leak = leak
-        let own = Array(leak.spots.shuffled().prefix(PuzzleLibrary.isAvailable ? 5 : 10))
+        let own = Self.pickSpots(leak.spots, count: PuzzleLibrary.isAvailable ? 5 : 10)
         let puzzles = PuzzleLibrary.pick(themes: leak.themes.isEmpty ? leak.kind.puzzleThemes : leak.themes, rating: playerRating, count: 10 - own.count)
         var mixed: [DrillQuestion] = []
         var ownQuestions = own.map { DrillQuestion(leak: leak.kind, source: .ownMistake($0)) }
@@ -107,10 +114,39 @@ final class DrillSessionModel {
         let side = questionStart.sideToMove == .white ? "White" : "Black"
         switch question.source {
         case .ownMistake(let spot):
-            return "From your game (\(spot.gameLabel)). You played \(spot.playedMove) here. Find a better move."
+            var text = "From your game (\(spot.gameLabel)). You played \(spot.playedMove) here"
+            if let clock = spot.clockBefore, leak.kind == .timeTrouble || leak.kind == .rushedMoves {
+                text += ", with \(Self.clockText(clock)) left on your clock"
+            }
+            return text + ". Find a better move."
         case .puzzle(let puzzle):
             return "Puzzle, rated \(puzzle.rating). Find the best move for \(side)."
         }
+    }
+
+    /// Seconds as a clock reading, like "0:08" or "2:41".
+    static func clockText(_ seconds: Double) -> String {
+        let whole = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", whole / 60, whole % 60)
+    }
+
+    /// Chooses own-mistake questions. First pass: one per game. Then more, but never two with the same
+    /// answer from the same game.
+    private static func pickSpots(_ spots: [DrillSpot], count: Int) -> [DrillSpot] {
+        var chosen: [DrillSpot] = []
+        var games = Set<String>()
+        var answers = Set<String>()
+        for spot in spots.shuffled() where chosen.count < count && games.insert(spot.game.pgn).inserted {
+            chosen.append(spot)
+            answers.insert(spot.game.pgn + "|" + spot.betterMove)
+        }
+        for spot in spots.shuffled() where chosen.count < count {
+            let key = spot.game.pgn + "|" + spot.betterMove
+            if answers.insert(key).inserted && !chosen.contains(where: { $0.game.pgn == spot.game.pgn && $0.ply == spot.ply }) {
+                chosen.append(spot)
+            }
+        }
+        return chosen
     }
 
     var sourceName: String {
@@ -380,6 +416,7 @@ final class DrillSessionModel {
     private func solved(_ text: String) {
         let outcome: DrillOutcome = hintUsed ? .hinted : (wrongTries == 0 ? .pass : .secondTry)
         highlights = []
+        arrows = []
         selected = nil
         phase = .solved
         message = (outcome == .pass ? "Correct, first try! " : outcome == .hinted ? "Solved, with a hint. " : "Solved on the second try. ") + text
@@ -405,12 +442,11 @@ final class DrillSessionModel {
         selected = nil
         highlights = []
         let line = bestMoves(for: question)
-        if let first = line.first { arrows = [arrow(first)] }
-        let san = line.first.flatMap { UCIMove.san(for: $0, in: board.position) }
+        let san = line.first.flatMap { UCIMove.san(for: $0, in: questionStart) }
         message = san.map { "Not this time. The best move was \($0)." } ?? "Not this time."
         finish(.revealed)
-        // Play the solution out from where the board is now (the arrow stays on the last move).
-        if !line.isEmpty { startReplay(from: board.position, moves: line, title: "The solution") }
+        // Play the whole solution out from the start, then return to the start with an arrow on the best move.
+        if line.isEmpty { restState() } else { startReplay(from: questionStart, moves: line, title: "The solution") }
     }
 
     /// Saves the result and prepares the one-line explanation.
@@ -428,14 +464,21 @@ final class DrillSessionModel {
         }
         DrillHistory.append(record)
         explanation = explanationSentence(for: question)
-        if arrows.isEmpty, let key = bestMoves(for: question).first { arrows = [arrow(key)] }
     }
 
-    private func explanationSentence(for question: DrillQuestion) -> String {
+    private func explanationSentence(for question: DrillQuestion) -> String? {
         switch question.source {
         case .ownMistake(let spot): DrillExplainer.sentence(for: spot, leak: leak.kind)
-        case .puzzle(let puzzle): DrillExplainer.sentence(for: puzzle)
+        case .puzzle(let puzzle): DrillExplainer.sentence(for: puzzle, wanted: leak.themes.isEmpty ? leak.kind.puzzleThemes : leak.themes)
         }
+    }
+
+    /// The resting look of a finished question: the starting position with an arrow on the best move.
+    private func restState() {
+        board = Board(position: questionStart)
+        selected = nil
+        highlights = []
+        if let question = current, let key = bestMoves(for: question).first { arrows = [arrow(key)] } else { arrows = [] }
     }
 
     // MARK: - Best move and replays
@@ -514,15 +557,21 @@ final class DrillSessionModel {
     /// Plays moves one at a time with an arrow, leaving the last arrow on the board.
     private func play(moves: [String]) async {
         let shown = index
-        for uci in moves {
+        for (step, uci) in moves.enumerated() {
             guard !Task.isCancelled, index == shown else { return }
             arrows = [arrow(uci)]
             try? await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled, index == shown, let move = UCIMove.play(uci, on: &board) else { break }
-            replayMoves.append(move.san)
+            // The first move is always the player's; replies alternate.
+            replayMoves.append(ReplayMove(san: UCIMove.display(move.san), mine: step % 2 == 0))
             try? await Task.sleep(for: .milliseconds(500))
         }
-        if index == shown { isReplaying = false }
+        guard !Task.isCancelled, index == shown else { return }
+        // Let the end of the line sink in, then go back to the starting position.
+        try? await Task.sleep(for: .milliseconds(1100))
+        guard !Task.isCancelled, index == shown, !exploring else { return }
+        restState()
+        isReplaying = false
     }
 
     // MARK: - Explore mode
@@ -555,11 +604,7 @@ final class DrillSessionModel {
         exploring = false
         exploreEval = nil
         exploreToken += 1
-        selected = nil
-        arrows = []
-        // Back to the position this question ends with.
-        if let question = current, let key = bestMoves(for: question).first { arrows = [arrow(key)] }
-        board = Board(position: questionStart)
+        restState()
     }
 
     private func exploreMoved() {
@@ -580,5 +625,7 @@ final class DrillSessionModel {
     /// Notation without check marks, so "Qb4+" and "Qb4" compare equal.
     private static func plain(_ san: String) -> String {
         san.filter { $0 != "+" && $0 != "#" && $0 != "!" && $0 != "?" }
+            .replacingOccurrences(of: "0", with: "O")   // ChessKit writes castling with zeros
+            .replacingOccurrences(of: "–", with: "-")
     }
 }

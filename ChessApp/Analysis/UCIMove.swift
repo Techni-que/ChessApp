@@ -19,7 +19,14 @@ enum UCIMove {
     /// Turns an engine move like "g1f3" into normal chess notation like "Nf3".
     static func san(for uci: String, in position: Position) -> String? {
         var board = Board(position: position)
-        return play(uci, on: &board)?.san
+        return play(uci, on: &board).map { display($0.san) }
+    }
+
+    /// Writes castling with letters ("O-O-O"), because ChessKit writes it with zeros.
+    static func display(_ san: String) -> String {
+        san.replacingOccurrences(of: "–", with: "-")
+            .replacingOccurrences(of: "0-0-0", with: "O-O-O")
+            .replacingOccurrences(of: "0-0", with: "O-O")
     }
 
     /// Finds the engine move (like "g1f3") for a move written in normal notation (like "Nf3").

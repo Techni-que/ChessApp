@@ -19,6 +19,11 @@ enum DrillExplainer {
         String(format: "%.1f", Double(abs(hundredths)) / 100)
     }
 
+    /// A score with its real sign, like "+2.6" or "-0.8".
+    private static func signed(_ hundredths: Int) -> String {
+        (hundredths < 0 ? "-" : "+") + pawns(hundredths)
+    }
+
     // MARK: - The player's own mistakes
 
     static func sentence(for spot: DrillSpot, leak: LeakKind) -> String {
@@ -65,21 +70,33 @@ enum DrillExplainer {
             }
 
         case .notConverting:
-            let lead = "+" + pawns(spot.evalBefore)
-            if spot.loss > 0 {
-                return "You were about \(lead) here. Trades and safe moves keep a lead; your \(played) gave back \(lost) pawns."
+            // What actually happens after the move that was played, from Stockfish's best reply.
+            let afterEval = spot.evalBefore - spot.loss
+            var sentence = "You were \(signed(spot.evalBefore)) here."
+            if let reply = spot.playedLine.first, reply.count >= 4, let replySAN = UCIMove.san(for: reply, in: after) {
+                let target = Square(String(reply.dropFirst(2).prefix(2)))
+                if let taken = after.piece(at: target), taken.color == mine {
+                    sentence += " After \(played), \(replySAN) wins your \(pieceName(taken.kind))."
+                } else if replySAN.contains("+") {
+                    sentence += " After \(played), \(replySAN) gives check and takes the initiative."
+                } else {
+                    sentence += " After \(played), Stockfish answers \(replySAN)."
+                }
             }
-            return "You were about \(lead) at this point but didn't win. Look for safe trades and avoid counterplay."
+            sentence += " The evaluation swung by \(lost) pawns, to \(signed(afterEval))."
+            let gain = TacticFinder.materialGain(from: before, line: spot.bestLine, forWhite: spot.playerIsWhite)
+            sentence += gain >= 1 ? " \(best) wins material and keeps the lead." : " \(best) keeps the lead."
+            return sentence
 
         case .notPunishing:
             let theirMove = spot.game.moveNames[spot.ply - 1].split(separator: " ").last.map(String.init) ?? "move"
             if let uci = spot.betterUCI, uci.count >= 4 {
                 let square = Square(String(uci.dropFirst(2).prefix(2)))
                 if let target = before.piece(at: square), target.color != mine {
-                    return "Their \(theirMove) left their \(pieceName(target.kind)) loose. You missed \(best)."
+                    return "After their \(theirMove), \(best) could take their \(pieceName(target.kind)). You played \(played) instead, and the evaluation swung by \(lost) pawns."
                 }
             }
-            return "Their \(theirMove) gave you an advantage. You missed \(best), and your \(played) gave back \(lost) pawns."
+            return "Their \(theirMove) was a mistake. You missed \(best), and your \(played) swung the evaluation by \(lost) pawns."
 
         case .rushedMoves:
             return "Stockfish prefers \(best). Your \(played) lost about \(lost) pawns, and you played it in seconds. Pause to check captures, checks and threats."
@@ -108,26 +125,89 @@ enum DrillExplainer {
 
     // MARK: - Puzzles
 
-    /// A sentence based on the Lichess theme tags, taking the most specific theme first.
-    static func sentence(for puzzle: Puzzle) -> String {
-        let table: [(String, String)] = [
-            ("mateIn1", "Checkmate in one move."),
-            ("mateIn2", "Checkmate in two moves."),
-            ("mateIn3", "Checkmate in three moves."),
-            ("fork", "A fork: one piece attacks two targets at once."),
-            ("pin", "A pin: a piece can't move without exposing something more valuable."),
-            ("skewer", "A skewer: attack a big piece so it has to move and leaves something behind it."),
-            ("discoveredAttack", "A discovered attack: moving one piece uncovers an attack by another."),
-            ("doubleCheck", "A double check: the king is attacked twice, so it has to move."),
-            ("hangingPiece", "A piece was left undefended, so it can be taken for free."),
-            ("trappedPiece", "A piece has no safe squares left, so it can be won."),
-            ("quietMove", "A quiet move, with no capture or check, that sets up the win."),
-            ("defensiveMove", "The best move here is a defensive one that keeps you safe."),
-            ("crushing", "You are winning big; the best move keeps the pressure on."),
-            ("advantage", "You have an advantage; the best move keeps it."),
-            ("endgame", "An endgame: every move counts, so look for the most accurate one."),
+    /// What one step of a puzzle's solution does, worked out from the board (not from the puzzle's tags).
+    private struct Step {
+        let san: String
+        let mine: Bool
+        let captured: Piece?
+        let forkTargets: [String]
+        let pins: Bool
+    }
+
+    private static func targetNames(of piece: Piece, in position: Position) -> [String] {
+        TacticFinder.attackedSquares(by: piece, in: position)
+            .compactMap { position.piece(at: $0) }
+            .filter { $0.color != piece.color && $0.kind != .pawn }
+            .sorted { TacticFinder.pieceValue($0.kind) > TacticFinder.pieceValue($1.kind) || $0.kind == .king }
+            .map { pieceName($0.kind) }
+    }
+
+    /// A concrete sentence about the puzzle's solution, or nil when we can't say anything safe.
+    /// It describes what the moves really do. `wanted` are the themes that put this puzzle in the drill;
+    /// when the puzzle shows more than one idea, the idea that matches those themes is mentioned first.
+    static func sentence(for puzzle: Puzzle, wanted: Set<String>) -> String? {
+        var board = Board(position: Position(fen: puzzle.fen) ?? .standard)
+        guard let setup = puzzle.moves.first, UCIMove.play(setup, on: &board) != nil else { return nil }
+        let moverIsWhite = board.position.sideToMove == .white
+        let startMaterial = TacticFinder.material(board.position, forWhite: moverIsWhite)
+
+        var steps: [Step] = []
+        for (index, uci) in puzzle.moves.dropFirst().enumerated() {
+            let dest = Square(String(uci.dropFirst(2).prefix(2)))
+            let captured = board.position.piece(at: dest)
+            guard let move = UCIMove.play(uci, on: &board) else { break }
+            let mine = index % 2 == 0
+            var forks: [String] = []
+            var pins = false
+            if mine, let moved = board.position.piece(at: dest) {
+                if TacticFinder.isFork(moved, in: board.position) {
+                    forks = targetNames(of: moved, in: board.position)
+                } else if TacticFinder.isPin(moved, in: board.position) {
+                    pins = true
+                }
+            }
+            steps.append(Step(san: UCIMove.display(move.san), mine: mine, captured: captured, forkTargets: forks, pins: pins))
+        }
+        guard let first = steps.first else { return nil }
+        let yourSteps = steps.enumerated().filter { $0.element.mine }
+
+        /// "Rxg8, then Rg1+ ..." when the idea happens on a later move, or just "Rxg8 ..." on the first.
+        func lead(_ at: Int, _ action: String) -> String {
+            at == 0 ? "\(steps[at].san) \(action)" : "\(first.san), then \(steps[at].san) \(action)"
+        }
+
+        let mateTheme = ["mateIn1": 1, "mateIn2": 2, "mateIn3": 3].first { puzzle.themes.contains($0.key) }
+        var ideas: [(theme: String, text: String)] = []
+        if let mate = mateTheme {
+            ideas.append(("mate", mate.value == 1 ? "\(first.san) is checkmate." : "\(first.san) starts a forced checkmate in \(mate.value)."))
+        }
+        if puzzle.themes.contains("fork"), let fork = yourSteps.first(where: { $0.element.forkTargets.count >= 2 }) {
+            let names = fork.element.forkTargets
+            ideas.append(("fork", lead(fork.offset, "forks the opponent's \(names[0]) and \(names[1]).")))
+        }
+        if !puzzle.themes.isDisjoint(with: ["pin", "skewer"]), let pin = yourSteps.first(where: { $0.element.pins }) {
+            ideas.append(("pin", lead(pin.offset, "pins an enemy piece to something more valuable.")))
+        }
+        let finalMaterial = {
+            var scratch = Board(position: Position(fen: puzzle.fen) ?? .standard)
+            _ = UCIMove.play(setup, on: &scratch)
+            for uci in puzzle.moves.dropFirst().prefix(steps.count) { _ = UCIMove.play(uci, on: &scratch) }
+            return TacticFinder.material(scratch.position, forWhite: moverIsWhite)
+        }()
+        let netGain = finalMaterial - startMaterial
+        if netGain >= 2, let grab = yourSteps.filter({ $0.element.captured != nil })
+            .max(by: { TacticFinder.pieceValue($0.element.captured!.kind) < TacticFinder.pieceValue($1.element.captured!.kind) }) {
+            let name = pieceName(grab.element.captured!.kind)
+            ideas.append(("capture", lead(grab.offset, "takes the \(name).") + " The line nets about \(netGain) pawns' worth of material."))
+        }
+
+        // Prefer the idea that matches the themes this drill asked for.
+        let preference: [String: Set<String>] = [
+            "mate": ["mateIn1", "mateIn2", "mateIn3", "mate"],
+            "fork": ["fork"], "pin": ["pin"],
+            "capture": ["hangingPiece", "trappedPiece", "advantage", "crushing"],
         ]
-        for (theme, text) in table where puzzle.themes.contains(theme) { return text }
-        return "Look for checks, captures and threats."
+        if let match = ideas.first(where: { !(preference[$0.theme] ?? []).isDisjoint(with: wanted) }) { return match.text }
+        return ideas.first?.text
     }
 }

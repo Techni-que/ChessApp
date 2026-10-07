@@ -24,6 +24,19 @@ enum LeakKind: String, CaseIterable {
         }
     }
 
+    /// A short name that fits in the navigation bar.
+    var shortTitle: String {
+        switch self {
+        case .hangingPieces: "Hanging pieces"
+        case .missedTactics: "Missed tactics"
+        case .notConverting: "Converting wins"
+        case .middlegameDrift: "Middlegame drift"
+        case .timeTrouble: "Low on time"
+        case .notPunishing: "Punishing blunders"
+        case .rushedMoves: "Rushed moves"
+        }
+    }
+
     var symbol: String {
         switch self {
         case .hangingPieces: "exclamationmark.triangle.fill"
@@ -109,6 +122,8 @@ struct DrillSpot {
     var mateIn: Int?
     /// How much the move played lost, in hundredths of a pawn.
     var loss = 0
+    /// Seconds on the player's clock before the move (only for games that have clock times).
+    var clockBefore: Double?
 }
 
 /// One card in the report.
@@ -176,6 +191,8 @@ enum LeakDetector {
         var tactic: TacticType?
         var requiresMate = false
         var mateIn: Int?
+        /// Seconds on the player's clock before the move, when the game has clock times.
+        var clockBefore: Double?
     }
 
     static func report(for games: [AnalysedGame]) -> LeakReport {
@@ -187,7 +204,7 @@ enum LeakDetector {
         /// Stockfish's better move for the player's move at `ply`, in normal notation.
         func betterMove(_ gameIndex: Int, _ ply: Int) -> String? {
             let item = games[gameIndex]
-            if let better = item.analysis.betterMoves[ply] { return better }
+            if let better = item.analysis.betterMoves[ply] { return UCIMove.display(better) }
             guard let uci = item.analysis.lines?[safe: ply - 1]?.first else { return nil }
             return UCIMove.san(for: uci, in: item.game.positions[ply - 1])
         }
@@ -263,7 +280,7 @@ enum LeakDetector {
                         let after = clocks[ply - 1]
                         let before = ply >= 3 ? clocks[ply - 3] : settings.base
                         if after < max(8, settings.base * 0.12) {
-                            timeErrors.append(Event(gameIndex: gameIndex, ply: ply, cost: lost))
+                            timeErrors.append(Event(gameIndex: gameIndex, ply: ply, cost: lost, clockBefore: before))
                         }
                         // Rushed: a mistake played in under 2.5 seconds with more than 30% of the clock left.
                         let spent = before + settings.increment - after
@@ -271,7 +288,8 @@ enum LeakDetector {
                             let left = Int((before / settings.base * 100).rounded())
                             let better = betterMove(gameIndex, ply).map { " Better was \($0)" } ?? ""
                             rushed.append(Event(gameIndex: gameIndex, ply: ply, cost: lost,
-                                                detail: String(format: "Played in %.1f s with %d%% of your clock left.", spent, left) + better))
+                                                detail: String(format: "Played in %.1f s with %d%% of your clock left.", spent, left) + better,
+                                                clockBefore: before))
                         }
                     }
                 }
@@ -290,20 +308,20 @@ enum LeakDetector {
             }
 
             // Failing to convert: clearly winning at some point, but didn't win.
+            // The moment we show is the player's biggest slip from a position where they were
+            // about 2 pawns up or better. If there was no real slip from such a position, we skip the game.
             if item.summary.outcome != .win {
-                var peakPly = 0
-                for ply in 1..<count where mine(ply) > mine(peakPly) { peakPly = ply }
-                let peak = mine(peakPly)
-                if peak >= 200 {
-                    // Show the player's biggest slip after the peak, else the peak itself.
-                    var shown = peakPly
-                    var biggest = 0
-                    for ply in peakPly + 1..<count where playerMoved(ply) && loss(ply) > biggest {
-                        biggest = loss(ply)
-                        shown = ply
-                    }
+                var peak = 0
+                for ply in 0..<count { peak = max(peak, mine(ply)) }
+                var shown: Int?
+                var biggest = 0
+                for ply in 1..<count where playerMoved(ply) && mine(ply - 1) >= 200 && loss(ply) > biggest {
+                    biggest = loss(ply)
+                    shown = ply
+                }
+                if peak >= 200, let shown, biggest >= 50 {
                     converts.append(Event(gameIndex: gameIndex, ply: shown, cost: min(peak, 500),
-                                          detail: String(format: "You were up about %.1f pawns in this game", Double(peak) / 100)))
+                                          detail: String(format: "You were +%.1f here and this move lost %.1f", Double(mine(shown - 1)) / 100, Double(biggest) / 100)))
                 }
             }
 
@@ -352,7 +370,8 @@ enum LeakDetector {
                              bestLine: Array(before.prefix(4)),
                              playedLine: Array((lines?[safe: event.ply] ?? []).prefix(3)),
                              tactic: event.tactic, mateIn: event.mateIn,
-                             loss: max(0, mineAt(event.ply - 1) - mineAt(event.ply)))
+                             loss: max(0, mineAt(event.ply - 1) - mineAt(event.ply)),
+                             clockBefore: event.clockBefore)
         }
 
         func example(_ event: Event) -> LeakExample {

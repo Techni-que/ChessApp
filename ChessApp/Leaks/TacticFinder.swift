@@ -163,19 +163,81 @@ enum TacticFinder {
         return false
     }
 
-    /// Pieces (not pawns or kings) of one colour that the opponent could simply win: attacked and either
-    /// undefended or attacked by something worth less. Pins are ignored; this is pure geometry.
+    /// Pieces and pawns of one colour (not the king) that the opponent, who is to move, wins material by taking.
+    /// The first capture must be legal right now (so checks and pins count). After that, both sides keep
+    /// capturing on that square with their cheapest piece, and either side may stop when stopping is better.
+    /// Pieces lined up behind each other (a rook behind a queen) join in as the ones in front are used up.
     static func enPrise(_ position: Position, color: Piece.Color) -> [Square] {
+        let board = Board(position: position)
         var result: [Square] = []
-        for piece in position.pieces where piece.color == color && piece.kind != .king && piece.kind != .pawn {
-            let attackers = position.pieces.filter { $0.color != color && attackedSquares(by: $0, in: position).contains(piece.square) }
-            guard !attackers.isEmpty else { continue }
-            let defended = position.pieces.contains {
-                $0.color == color && $0.square != piece.square && attackedSquares(by: $0, in: position).contains(piece.square)
+        for piece in position.pieces where piece.color == color && piece.kind != .king {
+            let takers = position.pieces.filter {
+                $0.color != color && board.legalMoves(forPieceAt: $0.square).contains(piece.square)
             }
-            if !defended || attackers.contains(where: { $0.kind != .king && pieceValue($0.kind) < pieceValue(piece.kind) }) {
+            guard let first = takers.min(by: { captureOrder($0) < captureOrder($1) }) else { continue }
+            if exchangeGain(on: piece.square, value: pieceValue(piece.kind), firstTaker: first, in: position) > 0 {
                 result.append(piece.square)
             }
+        }
+        return result
+    }
+
+    /// What the side making `firstTaker`'s capture comes out with after the trades on `target`.
+    private static func exchangeGain(on target: Square, value: Int, firstTaker: Piece, in position: Position) -> Int {
+        var gains = [value]
+        var removed: Set<Square> = [firstTaker.square]
+        var onSquare = firstTaker
+        var side = firstTaker.color.opposite
+        while true {
+            let next = attackers(of: target, color: side, in: position, ignoring: removed)
+            guard let taker = next.min(by: { captureOrder($0) < captureOrder($1) }) else { break }
+            // A king may only capture when the other side has nothing left to take back with.
+            if taker.kind == .king, !attackers(of: target, color: side.opposite, in: position, ignoring: removed).isEmpty { break }
+            gains.append(pieceValue(onSquare.kind) - gains[gains.count - 1])
+            removed.insert(taker.square)
+            onSquare = taker
+            side = side.opposite
+        }
+        // Work backwards: each side only keeps capturing if that is better than stopping.
+        for index in stride(from: gains.count - 1, to: 0, by: -1) {
+            gains[index - 1] = -max(-gains[index - 1], gains[index])
+        }
+        return gains[0]
+    }
+
+    /// Cheapest piece first; the king always last.
+    private static func captureOrder(_ piece: Piece) -> Int { piece.kind == .king ? 100 : pieceValue(piece.kind) }
+
+    /// The pieces of `color` that attack `target`, looking through the squares in `ignoring`
+    /// (pieces that have already captured and left). Pins and checks are ignored.
+    private static func attackers(of target: Square, color: Piece.Color, in position: Position, ignoring removed: Set<Square>) -> [Piece] {
+        let file = target.file.number
+        let rank = target.rank.value
+        var result: [Piece] = []
+        func own(_ square: Square) -> Piece? {
+            guard !removed.contains(square), let piece = position.piece(at: square), piece.color == color else { return nil }
+            return piece
+        }
+        for (df, dr) in straights + diagonals {
+            let straight = df == 0 || dr == 0
+            var distance = 1
+            while let square = square(file + df * distance, rank + dr * distance) {
+                if removed.contains(square) || position.piece(at: square) == nil {
+                    distance += 1
+                    continue
+                }
+                if let piece = own(square) {
+                    let slides = piece.kind == .queen || piece.kind == (straight ? .rook : .bishop)
+                    // A pawn attacks one square diagonally forward, so it sits one rank behind the target.
+                    let pawnRank = color == .white ? -1 : 1
+                    let steps = distance == 1 && (piece.kind == .king || (piece.kind == .pawn && !straight && dr == pawnRank))
+                    if slides || steps { result.append(piece) }
+                }
+                break
+            }
+        }
+        for (df, dr) in knightJumps {
+            if let square = square(file + df, rank + dr), let piece = own(square), piece.kind == .knight { result.append(piece) }
         }
         return result
     }

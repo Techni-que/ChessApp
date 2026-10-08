@@ -5,6 +5,8 @@ struct LeakReportView: View {
     let report: LeakReport
     @State private var path: [LoadedGameRoute] = []
     @State private var drilling: Leak?
+    /// Drill scores per card. Read again when you come back from a drill, so the card line is up to date.
+    @State private var scores: [LeakGroup: DrillStats.Score] = [:]
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -27,7 +29,7 @@ struct LeakReportView: View {
                     }
 
                     ForEach(Array(report.leaks.enumerated()), id: \.element.id) { index, leak in
-                        LeakCard(rank: index + 1, leak: leak, open: { example in
+                        LeakCard(rank: index + 1, leak: leak, score: scores[leak.group], open: { example in
                             path.append(LoadedGameRoute(game: example.game, startIndex: example.ply))
                         }, drill: { drilling = leak })
                     }
@@ -39,6 +41,8 @@ struct LeakReportView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+            .onAppear(perform: loadScores)
+            .onChange(of: drilling) { if drilling == nil { loadScores() } }
             .navigationDestination(item: $drilling) { leak in
                 DrillSessionView(leak: leak, playerRating: report.playerRating)
             }
@@ -47,11 +51,16 @@ struct LeakReportView: View {
             }
         }
     }
+
+    private func loadScores() {
+        scores = Dictionary(uniqueKeysWithValues: report.leaks.map { ($0.group, DrillStats.score(for: $0.group.rawValue)) })
+    }
 }
 
 private struct LeakCard: View {
     let rank: Int
     let leak: Leak
+    let score: DrillStats.Score?
     let open: (LeakExample) -> Void
     let drill: () -> Void
 
@@ -105,15 +114,14 @@ private struct LeakCard: View {
                 .buttonStyle(.plain)
             }
 
-            let score = DrillStats.score(for: leak.group.rawValue)
             Button(action: drill) {
                 Label("Drill this leak", systemImage: "scope")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .padding(.top, 4)
-            if score.right + score.wrong > 0 {
-                Text("Practised so far: \(score.right) right, \(score.wrong) wrong")
+            if let score, score.right + score.wrong > 0 {
+                Text(score.summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -124,8 +124,6 @@ struct DrillSpot {
     var habit: LeakKind = .missedTactics
     /// True when the opponent's move just before this one was a big mistake.
     var afterOpponentMistake = false
-    /// True for a position where the opponent's last move gave nothing away (the answer is "nothing to punish").
-    var isDecoy = false
 }
 
 /// One card in the report: a group, with the specific habits inside it.
@@ -143,8 +141,6 @@ struct Leak: Identifiable, Hashable {
     let examples: [LeakExample]
     /// The player's own mistakes in this group (all habits mixed), used by the drills.
     var spots: [DrillSpot] = []
-    /// Positions where the opponent's last move gave nothing away (Tactics only).
-    var decoys: [DrillSpot] = []
     /// The habits and how often each happened, e.g. "hanging pieces (5), missed forks (3)".
     var habits = ""
     /// How many of the Tactics events came right after an opponent mistake.
@@ -203,14 +199,12 @@ enum LeakDetector {
         var clockBefore: Double?
         var habit: LeakKind = .missedTactics
         var afterOpponentMistake = false
-        var isDecoy = false
     }
 
     static func report(for games: [AnalysedGame]) -> LeakReport {
         var hangs: [Event] = [], tactics: [Event] = [], timeErrors: [Event] = []
         var notPunishing: [Event] = [], rushed: [Event] = []
         var converts: [Event] = [], drifts: [Event] = []
-        var decoyCandidates: [Event] = []
         var gamesWithClocks = 0
 
         /// Stockfish's better move for the player's move at `ply`, in normal notation.
@@ -334,22 +328,6 @@ enum LeakDetector {
                 }
             }
 
-            // Positions where the opponent's last move gave nothing away, and the player played fine.
-            // These are the "nothing to punish" questions that keep the "What did they just leave?" drill honest.
-            if count > 20 {
-                for opponentPly in 8..<(count - 1) where !playerMoved(opponentPly) {
-                    let replyPly = opponentPly + 1
-                    guard playerMoved(replyPly),
-                          mine(opponentPly) - mine(opponentPly - 1) <= 30,
-                          abs(mine(opponentPly)) <= 300,
-                          loss(replyPly) <= 30,
-                          let line = analysis.lines?[safe: opponentPly], !line.isEmpty,
-                          TacticFinder.materialGain(from: positions[opponentPly], line: line, forWhite: isWhite) < 1
-                    else { continue }
-                    decoyCandidates.append(Event(gameIndex: gameIndex, ply: replyPly, cost: 0, habit: .notPunishing, isDecoy: true))
-                }
-            }
-
             // Failing to convert: clearly winning at some point, but didn't win.
             // The moment we show is the player's biggest slip from a position where they were
             // about 2 pawns up or better. If there was no real slip from such a position, we skip the game.
@@ -416,7 +394,7 @@ enum LeakDetector {
                              tactic: event.tactic, mateIn: event.mateIn,
                              loss: max(0, mineAt(event.ply - 1) - mineAt(event.ply)),
                              clockBefore: event.clockBefore, habit: event.habit,
-                             afterOpponentMistake: event.afterOpponentMistake, isDecoy: event.isDecoy)
+                             afterOpponentMistake: event.afterOpponentMistake)
         }
 
         func example(_ event: Event) -> LeakExample {
@@ -475,7 +453,6 @@ enum LeakDetector {
                 leak.tacticCounts = counts
                 leak.habits = counts.sorted { $0.value > $1.value }.map { $0.key.habitLabel(count: $0.value) }.joined(separator: ", ")
                 leak.afterOpponentMistake = events.filter(\.afterOpponentMistake).count
-                leak.decoys = Array(decoyCandidates.shuffled().prefix(8).compactMap(spot))
             case .advantage:
                 leak.habits = "failing to convert a winning position (\(events.count))"
             case .timeManagement:

@@ -137,10 +137,6 @@ struct DrillSessionView: View {
                     Button("Check") { model.checkLoose() }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.loosePicks.isEmpty || model.phase != .asking || model.pauseLeft > 0)
-                } else if model.mode == .leftCheck {
-                    Button("Nothing to punish") { model.claimNothing() }
-                        .buttonStyle(.bordered)
-                        .disabled(model.phase != .asking || model.pauseLeft > 0)
                 }
                 HStack(spacing: 16) {
                     Button { model.hint() } label: { Label("Hint", systemImage: "lightbulb") }
@@ -216,8 +212,7 @@ struct DrillSessionView: View {
                     }
                 }
 
-                let total = DrillStats.score(for: leak.group.rawValue)
-                Text("All-time for this leak: \(total.right) solved, \(total.wrong) shown the answer")
+                Text("All-time: " + DrillStats.score(for: leak.group.rawValue).summary)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 

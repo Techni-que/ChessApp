@@ -17,9 +17,13 @@ Copied from the planning project's `plans/build-status.md` on 7 Oct 2026. The pl
 
 ## In progress: step 9, a drill format per leak group
 
-- **Part 1 (pushed 7 Oct, waiting on the user's iPhone test):** report regrouped into group cards; Tactics drills "What's loose?" and "What did they just leave?" (can be "nothing"); same-pattern puzzle blocks from 9,017 puzzles (1.3 MB). Caveat: "What's loose?" rarely appears.
-- **Part 2:** Advantage capitalisation, playing on from own +2 positions against Stockfish, graded on keeping the lead. Don't start until the user confirms part 1 on the phone and OKs part 2.
-- **Part 3:** Time management. Time trouble = speed rounds on a real countdown, no retry. Rushing = "trap" positions where the obvious move fails, plus a minimum think time.
+- **Part 1 (pushed 7 Oct, tested on the iPhone 8 Oct):** report regrouped into group cards; Tactics drills "What's loose?" and "What did they just leave?"; same-pattern puzzle blocks from 9,017 puzzles (1.3 MB).
+- **Part 1 fix round (8 Oct, confirmed on the iPhone 8 Oct):**
+  - "What's loose?" now counts pawns, uses only captures that are legal right now (so a check or pin stops a capture), and counts trades on the square, including pieces lined up behind each other. Checked on both positions from the user's screenshots (f6 + g4; b4 + c4, not the queen).
+  - "Nothing to punish" decoys removed. Why: the user found quiet positions of little use. They come back in part 3 as traps ("looks free, but grabbing it loses"), using the same trap finder as the Rushing drills.
+  - Card line now reads "Drilled N questions · X solved, Y on the first try" and refreshes after a drill (it showed stale numbers before).
+- **Part 2 (next, OK'd by the user 8 Oct):** Advantage capitalisation, playing on from own +2 positions against Stockfish, graded on keeping the lead. Plan it in a fresh session before coding.
+- **Part 3:** Time management. Time trouble = speed rounds on a real countdown, no retry. Rushing = "trap" positions where the obvious move fails, plus a minimum think time. Reuse the trap finder for "What did they just leave?" decoys.
 - **Part 4:** Strategy, after a no-UI Strategy experiment on real games.
 
 ## Crash fix (7 Oct, confirmed on the iPhone)
@@ -27,7 +31,7 @@ Copied from the planning project's `plans/build-status.md` on 7 Oct 2026. The pl
 - Crashes on the phone (CrashBug2-5, all identical) were Stockfish aborting on a bad FEN: ChessKit keeps castling rights after the rook is captured on its home square. `StockfishEvaluator.engineSafeFEN` now keeps a castling letter only when the king and rook are really at home.
 - Also fixed: the checkmate/stalemate shortcut before asking Stockfish was dead (ChessKit's `toggleSideToMove()` is a no-op).
 - Faster analysis (confirmed on the iPhone: about 12 s per game, was 7-39 s): quick pass runs last move to first, Stockfish memory table 16 -> 64 MB, first 12 plies get a lighter look (depth 10, 80 ms). The game screen also shows seconds per move. Not done yet: skip the deep re-check when a game is already decided (scores are capped at +/-5).
-- Lag: a cpu_resource report showed 99% CPU for 91 s, all in Stockfish's search (4 threads on an iPhone 14 with 2 fast cores). Fewer engine threads is proposed, not done.
+- Lag: a cpu_resource report showed 99% CPU for 91 s, all in Stockfish's search (4 threads on an iPhone 14 with 2 fast cores). After the speed-ups the lag is gone (confirmed on the iPhone, 8 Oct), so the fewer-threads change is skipped for now.
 
 ## Build order after step 9
 

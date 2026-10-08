@@ -124,9 +124,8 @@ final class DrillSessionModel {
         return mixed
     }
 
-    /// A Tactics session: up to 2 "What's loose?", up to 2 "What did they just leave?" (one of them may be a
-    /// "nothing here" position), up to 3 find-the-move questions from your own games, then puzzles of the
-    /// patterns you miss most, with the same pattern kept together.
+    /// A Tactics session: up to 2 "What's loose?", up to 2 "What did they just leave?", up to 3 find-the-move
+    /// questions from your own games, then puzzles of the patterns you miss most, with the same pattern kept together.
     private static func tacticsQuestions(leak: Leak, rating: Int) -> [DrillQuestion] {
         func key(_ spot: DrillSpot) -> String { "\(spot.game.pgn)#\(spot.ply)" }
         var used = Set<String>()
@@ -141,19 +140,13 @@ final class DrillSessionModel {
 
         // 2. What did they just leave?
         let leftSpots = leak.spots.filter { $0.afterOpponentMistake && !used.contains(key($0)) }
-        let leftPicks = pickSpots(leftSpots, count: 2)
-        for spot in leftPicks {
+        for spot in pickSpots(leftSpots, count: 2) {
             questions.append(DrillQuestion(group: .tactics, source: .ownMistake(spot), mode: .leftCheck))
             used.insert(key(spot))
         }
-        // Sometimes the honest answer is "nothing": mix in one position where their move gave nothing away.
-        if !leftPicks.isEmpty, let decoy = leak.decoys.filter({ !used.contains(key($0)) }).randomElement() {
-            questions.insert(DrillQuestion(group: .tactics, source: .ownMistake(decoy), mode: .leftCheck), at: max(0, questions.count - 1))
-            used.insert(key(decoy))
-        }
 
         // 3. Find the better move in your own missed tactics.
-        let restSpots = leak.spots.filter { !used.contains(key($0)) && !$0.isDecoy }
+        let restSpots = leak.spots.filter { !used.contains(key($0)) }
         let findCount = max(0, min(3, 10 - questions.count - 3))
         for spot in pickSpots(restSpots, count: findCount) {
             questions.append(DrillQuestion(group: .tactics, source: .ownMistake(spot)))
@@ -183,7 +176,7 @@ final class DrillSessionModel {
         // If we still have fewer than 10 questions (few spots), add more of your own.
         questions += blocks
         if questions.count < 10 {
-            let more = leak.spots.filter { !used.contains(key($0)) && !$0.isDecoy }
+            let more = leak.spots.filter { !used.contains(key($0)) }
             for spot in pickSpots(more, count: 10 - questions.count) where !questions.contains(where: { q in
                 if case .ownMistake(let s) = q.source { return key(s) == key(spot) } else { return false }
             }) {
@@ -217,7 +210,7 @@ final class DrillSessionModel {
                 return "From your game (\(spot.gameLabel)). You played \(spot.playedMove), and this is the position now. Your opponent is to move. Tap every one of your pieces they can win, then press Check."
             case .leftCheck:
                 let theirs = Self.lastMoveText(for: spot)
-                return "From your game (\(spot.gameLabel)). Your opponent just played \(theirs) (marked on the board). Did it leave something? Find the move that punishes it, or tap \"Nothing to punish\"."
+                return "From your game (\(spot.gameLabel)). Your opponent just played \(theirs) (marked on the board). It left something. Find the move that punishes it."
             case .findMove:
                 var text = "From your game (\(spot.gameLabel)). You played \(spot.playedMove) here"
                 if let clock = spot.clockBefore, spot.habit == .timeTrouble || spot.habit == .rushedMoves {
@@ -454,16 +447,6 @@ final class DrillSessionModel {
         }
     }
 
-    /// "Nothing to punish" in a "What did they just leave?" question.
-    func claimNothing() {
-        guard mode == .leftCheck, phase == .asking, case .ownMistake(let spot)? = current?.source else { return }
-        if spot.isDecoy {
-            solved("Right: their last move didn't give anything away.")
-        } else {
-            wrong(nil, "Not quite, try again. Look again: their last move did leave something.")
-        }
-    }
-
     /// Tap logic shared by answering and exploring: pick a piece, then a square for it.
     private func selectOrMove(_ square: Square, onMove: ((from: Square, to: Square)) -> Void) {
         let mover = board.position.sideToMove
@@ -507,10 +490,6 @@ final class DrillSessionModel {
 
         switch question.source {
         case .ownMistake(let spot):
-            if question.mode == .leftCheck && spot.isDecoy {
-                wrong(tried, "Not quite, try again. Their last move didn't give anything away. Is there really something to win?")
-                return
-            }
             let played = Self.plain(move.san)
             if played == Self.plain(spot.betterMove) {
                 board = trial
@@ -599,10 +578,6 @@ final class DrillSessionModel {
             }
             return
         }
-        if case .ownMistake(let spot) = question.source, spot.isDecoy {
-            message = "Hint: check each of their pieces. Is anything loose, or attacked and not defended?"
-            return
-        }
         let key: String? = switch question.source {
         case .puzzle: puzzleMoves.first
         case .ownMistake: bestMoves(for: question).first
@@ -653,11 +628,7 @@ final class DrillSessionModel {
         }
         let line = bestMoves(for: question)
         let san = line.first.flatMap { UCIMove.san(for: $0, in: lineStart) }
-        if case .ownMistake(let spot) = question.source, spot.isDecoy {
-            message = "Not this time. Their last move didn't leave anything to win."
-        } else {
-            message = san.map { "Not this time. The best move was \($0)." } ?? "Not this time."
-        }
+        message = san.map { "Not this time. The best move was \($0)." } ?? "Not this time."
         finish(.revealed)
         // Play the whole solution out from the start, then return to the start with an arrow on the best move.
         if line.isEmpty { restState() } else { startReplay(from: lineStart, moves: line, title: "The solution") }
@@ -667,7 +638,7 @@ final class DrillSessionModel {
     private func finish(_ outcome: DrillOutcome) {
         guard let question = current else { return }
         outcomes[index] = outcome
-        DrillStats.record(leak.group.rawValue, right: outcome.solved)
+        DrillStats.record(leak.group.rawValue, outcome: outcome)
         var record = DrillRecord(key: question.stableKey, leak: leak.group.rawValue, outcome: outcome, date: Date())
         switch question.source {
         case .ownMistake(let spot):
@@ -688,9 +659,6 @@ final class DrillSessionModel {
                 let base = DrillExplainer.sentence(for: spot, leak: .hangingPieces)
                 return base.contains("safer") ? base : base + " A safer move was \(spot.betterMove)."
             case .leftCheck:
-                if spot.isDecoy {
-                    return "Their \(Self.lastMoveText(for: spot)) didn't give anything away. Stockfish's move here is \(spot.betterMove), but nothing was winning."
-                }
                 return DrillExplainer.sentence(for: spot, leak: .notPunishing)
             case .findMove:
                 return DrillExplainer.sentence(for: spot, leak: spot.habit)

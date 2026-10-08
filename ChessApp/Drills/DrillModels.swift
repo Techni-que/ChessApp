@@ -136,8 +136,19 @@ enum DrillHistory {
 /// Right and wrong answers per leak, saved on the phone for a future progress screen.
 enum DrillStats {
     struct Score: Codable {
+        /// Solved in any way (first try, second try or with a hint).
         var right = 0
+        /// Shown the answer.
         var wrong = 0
+        /// Solved on the first try with no hint. Missing in scores saved before 8 Oct 2026; then it is
+        /// worked out from the drill log.
+        var firstTry: Int?
+
+        /// For example "Drilled 12 questions · 9 solved, 4 on the first try".
+        var summary: String {
+            let total = right + wrong
+            return "Drilled \(total) \(total == 1 ? "question" : "questions") · \(right) solved, \(firstTry ?? 0) on the first try"
+        }
     }
 
     private static let storeKey = "drillStats"
@@ -148,12 +159,19 @@ enum DrillStats {
         return scores
     }
 
-    static func score(for key: String) -> Score { all()[key] ?? Score() }
+    static func score(for key: String) -> Score {
+        var score = all()[key] ?? Score()
+        if score.firstTry == nil {
+            score.firstTry = DrillHistory.all().filter { $0.leak == key && $0.outcome == .pass }.count
+        }
+        return score
+    }
 
-    static func record(_ key: String, right: Bool) {
+    static func record(_ key: String, outcome: DrillOutcome) {
         var scores = all()
-        var score = scores[key] ?? Score()
-        if right { score.right += 1 } else { score.wrong += 1 }
+        var score = self.score(for: key)
+        if outcome.solved { score.right += 1 } else { score.wrong += 1 }
+        if outcome == .pass { score.firstTry = (score.firstTry ?? 0) + 1 }
         scores[key] = score
         if let data = try? JSONEncoder().encode(scores) { UserDefaults.standard.set(data, forKey: storeKey) }
     }

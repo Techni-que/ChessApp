@@ -3,6 +3,9 @@
 A chess improvement companion for iPhone. Users load their own games, step through them,
 and (later) get engine analysis and training from their mistakes.
 
+## Start here
+Read `docs/build-status.md` first: what's built, what's next, and the decisions behind them. Update it at the end of every build step.
+
 ## The person building this
 The owner is a student with zero coding experience who builds the app by working with Claude Code.
 - Work in small steps: one feature per session, and get it building before moving on.
@@ -45,6 +48,10 @@ Any added dependency must be GPLv3-compatible.
 Don't use `Game(pgn:)` or `Move(san:)` to load games. They fail on en passant captures and ignore
 disambiguation on captures (e.g. "Rexe3"). `PGNReader` resolves moves itself via `Board.legalMoves`
 and plays them on a `Board`. It was checked against 531 real Chess.com games (final positions matched).
+Castling rights are only dropped when the king or rook MOVES, not when the rook is captured at home, so
+`position.fen` can claim castling with no rook. Stockfish then corrupts memory and aborts the app
+(assert in `Position::set`). Always send FENs through `StockfishEvaluator.engineSafeFEN`.
+`Position.toggleSideToMove()` does nothing since 0.17; flip the side in the FEN text instead.
 
 ## APIs (free, no login)
 - Chess.com: `api.chess.com/pub/player/{user}/games/archives`, then the newest monthly archives.
@@ -52,7 +59,7 @@ and plays them on a `Board`. It was checked against 531 real Chess.com games (fi
   Lichess allows only one request at a time per IP; a 429 means wait a minute.
 
 ## Run in Release
-The shared Run scheme (`ChessApp.xcodeproj/xcshareddata/xcschemes/ChessApp.xcscheme`) uses the Release configuration on purpose. In Debug, Stockfish's C++ is compiled with no optimisation and analysis is many times slower on a phone. The game screen shows "Analysed in N s" so speed can be checked.
+The shared Run scheme (`ChessApp.xcodeproj/xcshareddata/xcschemes/ChessApp.xcscheme`) uses the Release configuration on purpose. In Debug, Stockfish's C++ is compiled with no optimisation and analysis is many times slower on a phone. The game screen shows "Analysed in N s (x s per move)" so speed can be checked.
 
 ## Checking that it builds
 ```

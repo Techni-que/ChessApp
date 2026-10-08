@@ -25,6 +25,10 @@ final class AnalysisCenter {
     // Quick first pass: kept modest so a 40-move game takes well under a minute on an iPhone 14.
     private let quickDepth = 12
     private let quickMilliseconds = 150
+    // The first 6 moves each (12 plies) rarely hold mistakes, so they get a lighter look.
+    private let openingPlies = 12
+    private let openingDepth = 10
+    private let openingMilliseconds = 80
     // Suspected mistakes get a deeper second look, so sacrifices aren't wrongly flagged.
     private let deepDepth = 16
     private let deepMilliseconds = 500
@@ -109,14 +113,23 @@ final class AnalysisCenter {
         var lines: [[String]] = []
         await evaluator.newGame()
 
-        // Pass 1: a quick look at every position.
-        for (index, position) in positions.enumerated() {
+        // Pass 1: a quick look at every position, from the last move back to the first.
+        // Going backwards lets Stockfish reuse what it remembers about the position that comes next,
+        // which makes each look faster. The opening gets a lighter look; pass 2 re-checks any suspect.
+        var found: [StockfishEvaluator.Result?] = Array(repeating: nil, count: positions.count)
+        for (done, index) in positions.indices.reversed().enumerated() {
             if isPaused && !urgent { return nil }
-            let result = await evaluator.evaluate(position, depth: quickDepth, maxMilliseconds: quickMilliseconds)
+            let isOpening = index < openingPlies
+            found[index] = await evaluator.evaluate(positions[index],
+                                                    depth: isOpening ? openingDepth : quickDepth,
+                                                    maxMilliseconds: isOpening ? openingMilliseconds : quickMilliseconds)
+            progress[key] = 0.85 * Double(done + 1) / Double(positions.count)
+        }
+        for result in found {
+            // If Stockfish didn't answer, reuse the score before it so no fake swing appears.
             evals.append(result?.eval ?? evals.last ?? .centipawns(0))
             bestMoves.append(result?.bestMove)
             lines.append(Self.bestLine(result))
-            progress[key] = 0.85 * Double(index + 1) / Double(positions.count)
         }
 
         // Pass 2: look deeper at both sides of every suspected mistake, then re-judge.

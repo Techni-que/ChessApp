@@ -99,7 +99,10 @@ struct GameViewerView: View {
     private var analysisStatus: some View {
         if analysis != nil {
             if let seconds = analysisCenter.seconds(forPGN: model.game.pgn) {
-                Text("Analysed in \(Int(seconds.rounded())) s").font(.caption2).foregroundStyle(.secondary)
+                // Time per move too, so games of different lengths can be compared.
+                let perMove = seconds / Double(max(model.moveCount, 1))
+                Text("Analysed in \(Int(seconds.rounded())) s (\(perMove.formatted(.number.precision(.fractionLength(2)))) s per move)")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         } else {
             if let progress = analysisCenter.progress(forPGN: model.game.pgn) {

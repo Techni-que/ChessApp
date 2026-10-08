@@ -61,8 +61,8 @@ actor StockfishEvaluator {
             if Date() > deadline { await restart(); return false }
             try? await Task.sleep(for: .milliseconds(20))
         }
-        // A small memory table is plenty for short looks and keeps the phone cool.
-        await engine.send(command: .setoption(id: "Hash", value: "16"))
+        // A bigger memory table lets Stockfish reuse more work between neighbouring positions.
+        await engine.send(command: .setoption(id: "Hash", value: "64"))
         return await waitUntilReady(timeout: 20)
     }
 
@@ -114,17 +114,24 @@ actor StockfishEvaluator {
 
         // Finished games need no engine: checkmate and stalemate have fixed scores.
         // (ChessKit's Board checks the side that just moved, so we flip the turn before asking.)
-        var flipped = position
-        flipped.toggleSideToMove()
-        switch Board(position: flipped).state {
-        case .checkmate: return Result(eval: .mate(whiteToMove ? -1 : 1), bestMove: nil)
-        case .draw(.stalemate): return Result(eval: .centipawns(0), bestMove: nil)
-        default: break
+        // ChessKit's `toggleSideToMove()` does nothing since 0.17, so the turn is flipped in the FEN text.
+        var fenParts = position.fen.split(separator: " ").map(String.init)
+        if fenParts.count >= 4 {
+            fenParts[1] = whiteToMove ? "b" : "w"
+            fenParts[3] = "-"
+            if let flipped = Position(fen: fenParts.joined(separator: " ")) {
+                switch Board(position: flipped).state {
+                case .checkmate: return Result(eval: .mate(whiteToMove ? -1 : 1), bestMove: nil)
+                case .draw(.stalemate): return Result(eval: .centipawns(0), bestMove: nil)
+                default: break
+                }
+            }
         }
 
+        guard let fen = Self.engineSafeFEN(position) else { return nil }
         guard await startIfNeeded() else { return nil }
 
-        await engine.send(command: .position(.fen(position.fen)))
+        await engine.send(command: .position(.fen(fen)))
         await engine.send(command: .go(depth: depth, movetime: maxMilliseconds))
 
         var bestScore: EngineResponse.Info.Score?
@@ -179,6 +186,33 @@ actor StockfishEvaluator {
             eval = .centipawns(Int(bestScore.cp ?? 0) * sign)
         }
         return Result(eval: eval, bestMove: bestMove, line: bestLine)
+    }
+
+    /// The position as FEN text that Stockfish can read safely, or nil if it shouldn't be sent at all.
+    ///
+    /// ChessKit only drops a castling right when the king or rook MOVES, not when the rook is
+    /// captured on its starting square. Stockfish trusts the castling letters and searches for
+    /// the rook without stopping at the board's edge, which corrupts its memory and crashes the app.
+    /// So a castling letter is kept only if the king and that rook are really on their starting squares.
+    static func engineSafeFEN(_ position: Position) -> String? {
+        let kings = position.pieces.filter { $0.kind == .king }
+        guard kings.count == 2, Set(kings.map(\.color)).count == 2 else { return nil }
+        var parts = position.fen.split(separator: " ").map(String.init)
+        guard parts.count >= 4 else { return nil }
+
+        func has(_ kind: Piece.Kind, _ color: Piece.Color, _ square: String) -> Bool {
+            let piece = position.piece(at: Square(square))
+            return piece?.kind == kind && piece?.color == color
+        }
+        let rights: [(letter: Character, color: Piece.Color, king: String, rook: String)] = [
+            ("K", .white, "e1", "h1"), ("Q", .white, "e1", "a1"),
+            ("k", .black, "e8", "h8"), ("q", .black, "e8", "a8"),
+        ]
+        let kept = rights.filter { right in
+            parts[2].contains(right.letter) && has(.king, right.color, right.king) && has(.rook, right.color, right.rook)
+        }
+        parts[2] = kept.isEmpty ? "-" : String(kept.map(\.letter))
+        return parts.joined(separator: " ")
     }
 
     /// True if a UCI move like "e2e4" starts on a square holding a piece of the side to move.
